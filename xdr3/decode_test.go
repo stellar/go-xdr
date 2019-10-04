@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/nullstyle/go-xdr/xdr3"
+	. "github.com/stellar/go-xdr/xdr3"
 )
 
 // subTest is used to allow testing of the Unmarshal function into struct fields

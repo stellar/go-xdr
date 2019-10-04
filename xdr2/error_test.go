@@ -19,7 +19,7 @@ package xdr_test
 import (
 	"testing"
 
-	. "github.com/davecgh/go-xdr/xdr2"
+	. "github.com/stellar/go-xdr/xdr2"
 )
 
 // TestErrorCodeStringer tests the stringized output for the ErrorCode type.

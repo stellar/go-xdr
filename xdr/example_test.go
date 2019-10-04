@@ -19,7 +19,7 @@ package xdr_test
 import (
 	"fmt"
 
-	"github.com/davecgh/go-xdr/xdr"
+	"github.com/stellar/go-xdr/xdr"
 )
 
 // This example demonstrates how to use Marshal to automatically XDR encode

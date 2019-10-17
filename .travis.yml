@@ -1,19 +1,13 @@
 language: go
 go:
-  - release
-  - tip
+  - stable
+  - master
 sudo: false
-before_install:
-  - gotools=golang.org/x/tools
-  - if [ "$TRAVIS_GO_VERSION" = "release" ] || [ "$TRAVIS_GO_VERSION" = "go1.3.3" ]; then gotools=code.google.com/p/go.tools; fi
 install:
   - go get -d -t -v ./...
-  - go get -v $gotools/cmd/cover
-  - go get -v $gotools/cmd/vet
-  - go get -v github.com/bradfitz/goimports
-  - go get -v github.com/golang/lint/golint
+  - go get -v golang.org/x/tools/cmd/goimports
+  - go get -v golang.org/x/lint/golint
 script:
-  - export PATH=$PATH:$HOME/gopath/bin
   - ./goclean.sh
 after_success:
   - go get -v github.com/mattn/goveralls

@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/nullstyle/go-xdr/xdr3"
+	. "github.com/stellar/go-xdr/xdr3"
 )
 
 // subTest is used to allow testing of the Unmarshal function into struct fields
@@ -996,8 +996,6 @@ func (u defUnion) ArmForSwitch(sw int32) (string, bool) {
 	switch sw {
 	case 0:
 		return "Data", true
-	default: // void
-		return "", true
 	}
 
 	return "-", false

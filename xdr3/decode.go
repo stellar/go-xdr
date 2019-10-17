@@ -332,7 +332,7 @@ func (d *Decoder) DecodeFixedOpaque(size int32) ([]byte, int, error) {
 }
 
 func (d *Decoder) checkPadding(buf []byte, size int32) bool {
-	for _, pad := range buf[size:len(buf)] {
+	for _, pad := range buf[size:] {
 		if pad != 0x00 {
 			return false
 		}

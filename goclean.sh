@@ -6,10 +6,9 @@
 # 4. go vet        (http://golang.org/cmd/vet)
 # 5. test coverage (http://blog.golang.org/cover)
 
-set -e
+set -ex
 
 # Automatic checks
-cd xdr2
 test -z "$(gofmt -l -w .     | tee /dev/stderr)"
 test -z "$(goimports -l -w . | tee /dev/stderr)"
 test -z "$(golint .          | tee /dev/stderr)"
@@ -18,6 +17,7 @@ env GORACE="halt_on_error=1" go test -v -race ./...
 
 # Run test coverage on each subdirectories and merge the coverage profile.
 
+cd xdr2
 echo "mode: count" > profile.cov
 
 # Standard go tooling behavior is to ignore dirs with leading underscores.

@@ -1,7 +1,7 @@
 # go-xdr
 
-[![Build Status](https://travis-ci.org/stellar/go-xdr.png?branch=master)](https://travis-ci.org/stellar/go-xdr)
-[![GoDoc](https://godoc.org/github.com/stellar/go-xdr/xdr3?status.png)](http://godoc.org/github.com/stellar/go-xdr/xdr2)
+[![Build Status](https://github.com/stellar/go-xdr/workflows/Go/badge.svg)](https://github.com/stellar/go-xdr/actions)
+[![GoDoc](https://godoc.org/github.com/stellar/go-xdr/xdr3?status.png)](http://godoc.org/github.com/stellar/go-xdr/xdr3)
 
 Go-xdr implements the data representation portion of the External Data
 Representation (XDR) standard protocol as specified in RFC 4506 (obsoletes RFC

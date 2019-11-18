@@ -7,12 +7,8 @@ jobs:
       matrix:
         go: [1.12, 1.13]
     runs-on: ubuntu-latest
+    container: golang:${{ matrix.go }}-stretch
     steps:
-    - uses: actions/setup-go@v1
-      with:
-        go-version: ${{ matrix.go }}
-    # Temporary work around to set PATH, RE: https://github.com/actions/setup-go/issues/14.
-    - run: echo ::set-env name=PATH::$PATH:$(go env GOPATH)/bin
     - run: go get golang.org/x/tools/cmd/goimports
     - run: go get golang.org/x/lint/golint
     - uses: actions/checkout@v1

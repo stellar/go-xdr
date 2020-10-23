@@ -1053,3 +1053,47 @@ func TestPaddedReads(t *testing.T) {
 		t.Error("expected error when unmarshaling varopaque with non-zero padding byte, got none")
 	}
 }
+
+func TestDecodeUnionIntoExistingObject(t *testing.T) {
+	var buf bytes.Buffer
+	var idata int32 = 1
+	sdata := "data"
+	_, err := Marshal(&buf, aUnion{
+		Type: 0,
+		Data: &idata,
+	})
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	var s aUnion
+	_, err = Unmarshal(&buf, &s)
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	_, err = Marshal(&buf, aUnion{
+		Type: 1,
+		Text: &sdata,
+	})
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	_, err = Unmarshal(&buf, &s)
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	if s.Data != nil {
+		t.Error("Data should be nil")
+	}
+
+	if s.Type != 1 {
+		t.Error("Type does not match")
+	}
+
+	if *s.Text != sdata {
+		t.Error("Text does not match")
+	}
+}

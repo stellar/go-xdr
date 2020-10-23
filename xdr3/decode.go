@@ -509,11 +509,23 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int) (
 	return n, nil
 }
 
+func setUnionArmsToNil(v reflect.Value) {
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if f.Kind() != reflect.Ptr {
+			continue
+		}
+		v.Set(reflect.Zero(v.Type()))
+	}
+}
+
 // decodeUnion
 func (d *Decoder) decodeUnion(v reflect.Value) (int, error) {
 	// we should have already checked that v is a union
 	// prior to this call, so we panic if v is not a union
 	u := v.Interface().(Union)
+
+	setUnionArmsToNil(v)
 
 	i, n, err := d.DecodeInt()
 	if err != nil {

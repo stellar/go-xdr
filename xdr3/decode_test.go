@@ -93,6 +93,10 @@ func (u aUnion) ArmForSwitch(sw int32) (string, bool) {
 	return "-", false
 }
 
+type structWithPointer struct {
+	Data *string
+}
+
 // testExpectedURet is a convenience method to test an expected number of bytes
 // read and error for an unmarshal.
 func testExpectedURet(t *testing.T, name string, n, wantN int, err, wantErr error) bool {
@@ -1051,5 +1055,37 @@ func TestPaddedReads(t *testing.T) {
 	_, _, err = dec.DecodeOpaque(3)
 	if err == nil {
 		t.Error("expected error when unmarshaling varopaque with non-zero padding byte, got none")
+	}
+}
+
+func TestDecodeNilPointerIntoExistingObjectWithNotNilPointer(t *testing.T) {
+	var buf bytes.Buffer
+	data := "data"
+	_, err := Marshal(&buf, structWithPointer{Data: &data})
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	var s structWithPointer
+	_, err = Unmarshal(&buf, &s)
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	// Note:
+	// 1. structWithPointer.Data is nil.
+	// 2. We unmarshal into previously used object.
+	_, err = Marshal(&buf, structWithPointer{})
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	_, err = Unmarshal(&buf, &s)
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	if s.Data != nil {
+		t.Error("Data should be nil")
 	}
 }

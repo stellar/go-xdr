@@ -929,6 +929,26 @@ func (d *Decoder) decode(ve reflect.Value, maxSize int) (int, error) {
 	return 0, err
 }
 
+func setPtrToNil(v *reflect.Value) error {
+	if v.Kind() != reflect.Ptr {
+		msg := fmt.Sprintf("value is not a pointer: '%v'",
+			v.Type().String())
+		err := unmarshalError("decodePtr", ErrBadArguments, msg,
+			nil, nil)
+		return err
+	}
+	if !v.CanSet() {
+		msg := fmt.Sprintf("pointer value cannot be changed for '%v'",
+			v.Type().String())
+		err := unmarshalError("decodePtr", ErrNotSettable, msg,
+			nil, nil)
+		return err
+	}
+
+	v.Set(reflect.Zero(v.Type()))
+	return nil
+}
+
 func allocPtrIfNil(v *reflect.Value) error {
 	if v.Kind() != reflect.Ptr {
 		msg := fmt.Sprintf("value is not a pointer: '%v'",
@@ -957,7 +977,12 @@ func (d *Decoder) decodePtr(v reflect.Value) (int, error) {
 
 	present, n, err := d.DecodeBool()
 
-	if err != nil || !present {
+	if err != nil {
+		return n, err
+	}
+
+	if !present {
+		err = setPtrToNil(&v)
 		return n, err
 	}
 

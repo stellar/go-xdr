@@ -122,7 +122,6 @@ func TestMarshalError(t *testing.T) {
 				Func:        "test",
 				Description: "EOF while encoding 5 bytes",
 				Value:       []byte{0x01, 0x02},
-				Err:         io.EOF,
 			},
 			"xdr:test: EOF while encoding 5 bytes - wrote: '[1 2]'",
 		},

@@ -17,6 +17,8 @@
 package xdr_test
 
 import (
+	"errors"
+	"io"
 	"testing"
 
 	. "github.com/stellar/go-xdr/xdr3"
@@ -66,6 +68,16 @@ func TestUnmarshalError(t *testing.T) {
 		},
 		{
 			UnmarshalError{
+				ErrorCode:   ErrIO,
+				Func:        "test",
+				Description: "underlying io error",
+				Value:       "testval",
+				Err:         io.ErrShortBuffer,
+			},
+			"xdr:test: underlying io error - read: 'testval'",
+		},
+		{
+			UnmarshalError{
 				ErrorCode:   ErrBadEnumValue,
 				Func:        "test",
 				Description: "invalid enum",
@@ -91,6 +103,10 @@ func TestUnmarshalError(t *testing.T) {
 				test.want)
 			continue
 		}
+		if test.in.Err != nil && !errors.Is(&test.in, test.in.Err) {
+			t.Errorf("Error #%d\n is not is-able on underlying error", i)
+			continue
+		}
 	}
 }
 
@@ -106,8 +122,19 @@ func TestMarshalError(t *testing.T) {
 				Func:        "test",
 				Description: "EOF while encoding 5 bytes",
 				Value:       []byte{0x01, 0x02},
+				Err:         io.EOF,
 			},
 			"xdr:test: EOF while encoding 5 bytes - wrote: '[1 2]'",
+		},
+		{
+			MarshalError{
+				ErrorCode:   ErrIO,
+				Func:        "test",
+				Description: "underlying io error",
+				Value:       []byte{0x01, 0x02},
+				Err:         io.ErrShortWrite,
+			},
+			"xdr:test: underlying io error - wrote: '[1 2]'",
 		},
 		{
 			MarshalError{
@@ -134,6 +161,10 @@ func TestMarshalError(t *testing.T) {
 		if result != test.want {
 			t.Errorf("Error #%d\n got: %s want: %s", i, result,
 				test.want)
+			continue
+		}
+		if test.in.Err != nil && !errors.Is(&test.in, test.in.Err) {
+			t.Errorf("Error #%d\n is not is-able on underlying error", i)
 			continue
 		}
 	}

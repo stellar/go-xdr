@@ -113,8 +113,8 @@ func ExampleNewDecoder() {
 	// Get a new decoder for manual decoding.
 	dec := xdr.NewDecoder(bytes.NewReader(encodedData))
 
-	signature, _, err := dec.DecodeFixedOpaque(3)
-	if err != nil {
+	signature := make([]byte, 3)
+	if _, err := dec.DecodeFixedOpaque(signature); err != nil {
 		fmt.Println(err)
 		return
 	}

@@ -431,8 +431,19 @@ func (d *Decoder) decodeFixedArray(v reflect.Value, ignoreOpaque bool) (int, err
 	// Treat [#]byte (byte is alias for uint8) as opaque data unless
 	// ignored.
 	if !ignoreOpaque && v.Type().Elem().Kind() == reflect.Uint8 {
-		dest := v.Slice(0, v.Len()).Bytes()
-		return d.DecodeFixedOpaque(dest)
+		if v.CanAddr() {
+			/// decode in-place if the array is addressable
+			// (can't obtain a slice from an unaddressable array)
+			dest := v.Slice(0, v.Len()).Bytes()
+			return d.DecodeFixedOpaque(dest)
+		}
+		data := make([]uint8, v.Len())
+		n, err := d.DecodeFixedOpaque(data)
+		if err != nil {
+			return n, err
+		}
+		reflect.Copy(v, reflect.ValueOf(data))
+		return n, nil
 	}
 
 	// Decode each array element.

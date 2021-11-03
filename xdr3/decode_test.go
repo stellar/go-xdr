@@ -686,9 +686,7 @@ func TestDecoder(t *testing.T) {
 			rv, n, err = dec.DecodeEnum(validEnums)
 		case fDecodeFixedOpaque:
 			want := test.wantVal.([]byte)
-			buf := make([]byte, len(want))
-			n, err = dec.DecodeFixedOpaque(buf)
-			rv = buf
+			rv, n, err = dec.DecodeFixedOpaque(int32(len(want)))
 		case fDecodeFloat:
 			rv, n, err = dec.DecodeFloat()
 		case fDecodeHyper:
@@ -1034,8 +1032,7 @@ func TestPaddedReads(t *testing.T) {
 
 	// opaque
 	dec := NewDecoder(bytes.NewReader([]byte{0x0, 0x0, 0x1, 0x1}))
-	out := make([]byte, 3, 3)
-	_, err := dec.DecodeFixedOpaque(out)
+	_, _, err := dec.DecodeFixedOpaque(3)
 	if err == nil {
 		t.Error("expected error when unmarshaling opaque with non-zero padding byte, got none")
 	}

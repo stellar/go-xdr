@@ -292,6 +292,7 @@ func (enc *Encoder) EncodeFixedOpaque(v []byte) (int, error) {
 	// Write any padding if needed.
 	if pad > 0 {
 		// the maximum value of pad is 3, so the scratch buffer should be enough
+		_ = enc.scratchBuf[2]
 		b := enc.scratchBuf[:pad]
 		for i := 0; i < pad; i++ {
 			b[i] = 0x0

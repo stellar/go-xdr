@@ -295,7 +295,19 @@ func (d *Decoder) DecodeDouble() (float64, int, error) {
 // Reference:
 // 	RFC Section 4.9 - Fixed-Length Opaque Data
 // 	Fixed-length uninterpreted data zero-padded to a multiple of four
-func (d *Decoder) DecodeFixedOpaque(out []byte) (int, error) {
+func (d *Decoder) DecodeFixedOpaque(size int32) ([]byte, int, error) {
+	out := make([]byte, size)
+	n, err := d.DecodeFixedOpaqueInplace(out)
+	if err != nil {
+		return nil, n, err
+	}
+	return out, n, nil
+}
+
+// DecodeFixedOpaqueInplace is an in-place version of DecodeFixedOpaque.
+// It improves performance when the destination is pre-allocated (which avoids
+// internally allocating an extra slice and does not require further copying)
+func (d *Decoder) DecodeFixedOpaqueInplace(out []byte) (int, error) {
 	size := len(out)
 	// Nothing to do if size is 0.
 	if size == 0 {
@@ -305,7 +317,7 @@ func (d *Decoder) DecodeFixedOpaque(out []byte) (int, error) {
 	pad := (4 - (size % 4)) % 4
 	paddedSize := size + pad
 	if uint(paddedSize) > uint(maxInt32) {
-		err := unmarshalError("DecodeFixedOpaque", ErrOverflow,
+		err := unmarshalError("DecodeFixedOpaqueInplace", ErrOverflow,
 			errMaxSlice, paddedSize, nil)
 		return 0, err
 	}
@@ -313,18 +325,19 @@ func (d *Decoder) DecodeFixedOpaque(out []byte) (int, error) {
 	n, err := io.ReadFull(d.r, out)
 	if err != nil {
 		msg := fmt.Sprintf(errIODecode, err.Error(), size)
-		err := unmarshalError("DecodeFixedOpaque", ErrIO, msg, out[:n],
+		err := unmarshalError("DecodeFixedOpaqueInplace", ErrIO, msg, out[:n],
 			err)
 		return n, err
 	}
 
 	if pad > 0 {
 		// the maximum value of pad is 3, so the scratch buffer should be enough
+		_ = d.scratchBuf[2]
 		padding := d.scratchBuf[:pad]
 		n2, err := io.ReadFull(d.r, padding)
 		if err != nil {
 			msg := fmt.Sprintf(errIODecode, err.Error(), pad)
-			err := unmarshalError("DecodeFixedOpaque", ErrIO, msg, out[:n],
+			err := unmarshalError("DecodeFixedOpaqueInplace", ErrIO, msg, out[:n],
 				err)
 			return n, err
 		}
@@ -333,7 +346,7 @@ func (d *Decoder) DecodeFixedOpaque(out []byte) (int, error) {
 		for _, p := range padding {
 			if p != 0x00 {
 				msg := "non-zero padding"
-				err := unmarshalError("DecodeFixedOpaque", ErrIO, msg, padding[:n2], nil)
+				err := unmarshalError("DecodeFixedOpaqueInplace", ErrIO, msg, padding[:n2], nil)
 				return n, err
 			}
 		}
@@ -367,8 +380,8 @@ func (d *Decoder) DecodeOpaque(maxSize int) ([]byte, int, error) {
 			dataLen, nil)
 		return nil, n, err
 	}
-	rv := make([]byte, dataLen)
-	n2, err := d.DecodeFixedOpaque(rv)
+
+	rv, n2, err := d.DecodeFixedOpaque(int32(dataLen))
 	n += n2
 	if err != nil {
 		return nil, n, err
@@ -406,8 +419,7 @@ func (d *Decoder) DecodeString(maxSize int) (string, int, error) {
 		return "", n, err
 	}
 
-	opaque := make([]byte, dataLen)
-	n2, err := d.DecodeFixedOpaque(opaque)
+	opaque, n2, err := d.DecodeFixedOpaque(int32(dataLen))
 	n += n2
 	if err != nil {
 		return "", n, err
@@ -431,19 +443,8 @@ func (d *Decoder) decodeFixedArray(v reflect.Value, ignoreOpaque bool) (int, err
 	// Treat [#]byte (byte is alias for uint8) as opaque data unless
 	// ignored.
 	if !ignoreOpaque && v.Type().Elem().Kind() == reflect.Uint8 {
-		if v.CanAddr() {
-			/// decode in-place if the array is addressable
-			// (can't obtain a slice from an unaddressable array)
-			dest := v.Slice(0, v.Len()).Bytes()
-			return d.DecodeFixedOpaque(dest)
-		}
-		data := make([]uint8, v.Len())
-		n, err := d.DecodeFixedOpaque(data)
-		if err != nil {
-			return n, err
-		}
-		reflect.Copy(v, reflect.ValueOf(data))
-		return n, nil
+		dest := v.Slice(0, v.Len()).Bytes()
+		return d.DecodeFixedOpaqueInplace(dest)
 	}
 
 	// Decode each array element.
@@ -499,8 +500,7 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int) (
 
 	// Treat []byte (byte is alias for uint8) as opaque data unless ignored.
 	if !ignoreOpaque && v.Type().Elem().Kind() == reflect.Uint8 {
-		data := make([]byte, sliceLen)
-		n2, err := d.DecodeFixedOpaque(data)
+		data, n2, err := d.DecodeFixedOpaque(int32(sliceLen))
 		n += n2
 		if err != nil {
 			return n, err

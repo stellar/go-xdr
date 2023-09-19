@@ -30,6 +30,7 @@ const maxInt32 = int(^uint32(0) >> 1)
 var errMaxSlice = "data exceeds max slice limit"
 var errIODecode = "%s while decoding %d bytes"
 
+// DecodeDefaultMaxDepth is the default maximum decoding depth
 const DecodeDefaultMaxDepth = 200
 
 /*
@@ -1049,12 +1050,13 @@ func (d *Decoder) indirectIfPtr(v reflect.Value) (reflect.Value, error) {
 
 // Decode operates identically to the Unmarshal function with the exception of
 // using the reader associated with the Decoder as the source of XDR-encoded
-// data instead of a user-supplied reader.  See the Unmarhsal documentation for
-// specifics.
+// data instead of a user-supplied reader. See the Unmarhsal documentation for
+// specifics. Decode(v) is equivalent to DecodeWithMaxDepth(v, DecodeDefaultMaxDepth)
 func (d *Decoder) Decode(v interface{}) (int, error) {
 	return d.DecodeWithMaxDepth(v, DecodeDefaultMaxDepth)
 }
 
+// DecodeWithMaxDepth behaves like Decode, except an explicit maximum decoding depth is used
 func (d *Decoder) DecodeWithMaxDepth(v interface{}, maxDepth uint) (int, error) {
 	if v == nil {
 		msg := "can't unmarshal to nil interface"

@@ -30,6 +30,8 @@ const maxInt32 = int(^uint32(0) >> 1)
 var errMaxSlice = "data exceeds max slice limit"
 var errIODecode = "%s while decoding %d bytes"
 
+const DecodeDefaultMaxDepth = 200
+
 /*
 Unmarshal parses XDR-encoded data into the value pointed to by v reading from
 reader r and returning the total number of bytes read.  An addressable pointer
@@ -62,12 +64,11 @@ by v and performs a mapping of underlying XDR types to Go types as follows:
 
 Notes and Limitations:
 
-	* Automatic unmarshalling of variable and fixed-length arrays of uint8s
-	  requires a special struct tag `xdropaque:"false"` since byte slices
-	  and byte arrays are assumed to be opaque data and byte is a Go alias
-	  for uint8 thus indistinguishable under reflection
-	* Cyclic data structures are not supported and will result in infinite
-	  loops
+  - Automatic unmarshalling of variable and fixed-length arrays of uint8s
+    requires a special struct tag `xdropaque:"false"` since byte slices
+    and byte arrays are assumed to be opaque data and byte is a Go alias
+    for uint8 thus indistinguishable under reflection
+  - Cyclic data structures are not supported and will result in ErrMaxDecodingDepth errors
 
 If any issues are encountered during the unmarshalling process, an
 UnmarshalError is returned with a human readable description as well as
@@ -101,8 +102,9 @@ type Decoder struct {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-// 	RFC Section 4.1 - Integer
-// 	32-bit big-endian signed integer in range [-2147483648, 2147483647]
+//
+//	RFC Section 4.1 - Integer
+//	32-bit big-endian signed integer in range [-2147483648, 2147483647]
 func (d *Decoder) DecodeInt() (int32, int, error) {
 	n, err := io.ReadFull(d.r, d.scratchBuf[:4])
 	if err != nil {
@@ -122,8 +124,9 @@ func (d *Decoder) DecodeInt() (int32, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-// 	RFC Section 4.2 - Unsigned Integer
-// 	32-bit big-endian unsigned integer in range [0, 4294967295]
+//
+//	RFC Section 4.2 - Unsigned Integer
+//	32-bit big-endian unsigned integer in range [0, 4294967295]
 func (d *Decoder) DecodeUint() (uint32, int, error) {
 	n, err := io.ReadFull(d.r, d.scratchBuf[:4])
 	if err != nil {
@@ -146,8 +149,9 @@ func (d *Decoder) DecodeUint() (uint32, int, error) {
 // the parsed enumeration value is not one of the provided valid values.
 //
 // Reference:
-// 	RFC Section 4.3 - Enumeration
-// 	Represented as an XDR encoded signed integer
+//
+//	RFC Section 4.3 - Enumeration
+//	Represented as an XDR encoded signed integer
 func (d *Decoder) DecodeEnum(validEnums map[int32]bool) (int32, int, error) {
 	val, n, err := d.DecodeInt()
 	if err != nil {
@@ -169,8 +173,9 @@ func (d *Decoder) DecodeEnum(validEnums map[int32]bool) (int32, int, error) {
 // the parsed value is not a 0 or 1.
 //
 // Reference:
-// 	RFC Section 4.4 - Boolean
-// 	Represented as an XDR encoded enumeration where 0 is false and 1 is true
+//
+//	RFC Section 4.4 - Boolean
+//	Represented as an XDR encoded enumeration where 0 is false and 1 is true
 func (d *Decoder) DecodeBool() (bool, int, error) {
 	val, n, err := d.DecodeInt()
 	if err != nil {
@@ -194,8 +199,9 @@ func (d *Decoder) DecodeBool() (bool, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-// 	RFC Section 4.5 - Hyper Integer
-// 	64-bit big-endian signed integer in range [-9223372036854775808, 9223372036854775807]
+//
+//	RFC Section 4.5 - Hyper Integer
+//	64-bit big-endian signed integer in range [-9223372036854775808, 9223372036854775807]
 func (d *Decoder) DecodeHyper() (int64, int, error) {
 	n, err := io.ReadFull(d.r, d.scratchBuf[:8])
 	if err != nil {
@@ -218,8 +224,9 @@ func (d *Decoder) DecodeHyper() (int64, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-// 	RFC Section 4.5 - Unsigned Hyper Integer
-// 	64-bit big-endian unsigned integer in range [0, 18446744073709551615]
+//
+//	RFC Section 4.5 - Unsigned Hyper Integer
+//	64-bit big-endian unsigned integer in range [0, 18446744073709551615]
 func (d *Decoder) DecodeUhyper() (uint64, int, error) {
 	n, err := io.ReadFull(d.r, d.scratchBuf[:8])
 	if err != nil {
@@ -241,8 +248,9 @@ func (d *Decoder) DecodeUhyper() (uint64, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-// 	RFC Section 4.6 - Floating Point
-// 	32-bit single-precision IEEE 754 floating point
+//
+//	RFC Section 4.6 - Floating Point
+//	32-bit single-precision IEEE 754 floating point
 func (d *Decoder) DecodeFloat() (float32, int, error) {
 	n, err := io.ReadFull(d.r, d.scratchBuf[:4])
 	if err != nil {
@@ -263,8 +271,9 @@ func (d *Decoder) DecodeFloat() (float32, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-// 	RFC Section 4.7 -  Double-Precision Floating Point
-// 	64-bit double-precision IEEE 754 floating point
+//
+//	RFC Section 4.7 -  Double-Precision Floating Point
+//	64-bit double-precision IEEE 754 floating point
 func (d *Decoder) DecodeDouble() (float64, int, error) {
 	n, err := io.ReadFull(d.r, d.scratchBuf[:8])
 	if err != nil {
@@ -293,8 +302,9 @@ func (d *Decoder) DecodeDouble() (float64, int, error) {
 // multiple of 4.
 //
 // Reference:
-// 	RFC Section 4.9 - Fixed-Length Opaque Data
-// 	Fixed-length uninterpreted data zero-padded to a multiple of four
+//
+//	RFC Section 4.9 - Fixed-Length Opaque Data
+//	Fixed-length uninterpreted data zero-padded to a multiple of four
 func (d *Decoder) DecodeFixedOpaque(size int32) ([]byte, int, error) {
 	out := make([]byte, size)
 	n, err := d.DecodeFixedOpaqueInplace(out)
@@ -363,8 +373,9 @@ func (d *Decoder) DecodeFixedOpaqueInplace(out []byte) (int, error) {
 // the opaque data is larger than the max length of a Go slice.
 //
 // Reference:
-// 	RFC Section 4.10 - Variable-Length Opaque Data
-// 	Unsigned integer length followed by fixed opaque data of that length
+//
+//	RFC Section 4.10 - Variable-Length Opaque Data
+//	Unsigned integer length followed by fixed opaque data of that length
 func (d *Decoder) DecodeOpaque(maxSize int) ([]byte, int, error) {
 	dataLen, n, err := d.DecodeUint()
 	if err != nil {
@@ -400,9 +411,10 @@ func (d *Decoder) DecodeOpaque(maxSize int) ([]byte, int, error) {
 // the string data is larger than the max length of a Go slice.
 //
 // Reference:
-// 	RFC Section 4.11 - String
-// 	Unsigned integer length followed by bytes zero-padded to a multiple of
-// 	four
+//
+//	RFC Section 4.11 - String
+//	Unsigned integer length followed by bytes zero-padded to a multiple of
+//	four
 func (d *Decoder) DecodeString(maxSize int) (string, int, error) {
 	dataLen, n, err := d.DecodeUint()
 	if err != nil {
@@ -437,9 +449,10 @@ func (d *Decoder) DecodeString(maxSize int) (string, int, error) {
 // the array elements.
 //
 // Reference:
-// 	RFC Section 4.12 - Fixed-Length Array
-// 	Individually XDR encoded array elements
-func (d *Decoder) decodeFixedArray(v reflect.Value, ignoreOpaque bool) (int, error) {
+//
+//	RFC Section 4.12 - Fixed-Length Array
+//	Individually XDR encoded array elements
+func (d *Decoder) decodeFixedArray(v reflect.Value, ignoreOpaque bool, maxDepth uint) (int, error) {
 	// Treat [#]byte (byte is alias for uint8) as opaque data unless
 	// ignored.
 	if !ignoreOpaque && v.Type().Elem().Kind() == reflect.Uint8 {
@@ -450,7 +463,7 @@ func (d *Decoder) decodeFixedArray(v reflect.Value, ignoreOpaque bool) (int, err
 	// Decode each array element.
 	var n int
 	for i := 0; i < v.Len(); i++ {
-		n2, err := d.decode(v.Index(i), 0)
+		n2, err := d.decode(v.Index(i), 0, maxDepth)
 		n += n2
 		if err != nil {
 			return n, err
@@ -471,10 +484,11 @@ func (d *Decoder) decodeFixedArray(v reflect.Value, ignoreOpaque bool) (int, err
 // the array elements.
 //
 // Reference:
-// 	RFC Section 4.13 - Variable-Length Array
-// 	Unsigned integer length followed by individually XDR encoded array
-// 	elements
-func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int) (int, error) {
+//
+//	RFC Section 4.13 - Variable-Length Array
+//	Unsigned integer length followed by individually XDR encoded array
+//	elements
+func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int, maxDepth uint) (int, error) {
 	dataLen, n, err := d.DecodeUint()
 	if err != nil {
 		return n, err
@@ -511,7 +525,7 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int) (
 
 	// Decode each slice element.
 	for i := 0; i < sliceLen; i++ {
-		n2, err := d.decode(v.Index(i), 0)
+		n2, err := d.decode(v.Index(i), 0, maxDepth)
 		n += n2
 		if err != nil {
 			return n, err
@@ -531,7 +545,7 @@ func setUnionArmsToNil(v reflect.Value) {
 }
 
 // decodeUnion
-func (d *Decoder) decodeUnion(v reflect.Value) (int, error) {
+func (d *Decoder) decodeUnion(v reflect.Value, maxDepth uint) (int, error) {
 	// we should have already checked that v is a union
 	// prior to this call, so we panic if v is not a union
 	u := v.Interface().(Union)
@@ -595,7 +609,7 @@ func (d *Decoder) decodeUnion(v reflect.Value) (int, error) {
 		maxSize = int(sz)
 	}
 
-	n2, err := d.decode(vv.Elem(), maxSize)
+	n2, err := d.decode(vv.Elem(), maxSize, maxDepth)
 	n += n2
 
 	if err != nil {
@@ -613,9 +627,10 @@ func (d *Decoder) decodeUnion(v reflect.Value) (int, error) {
 // the elements.
 //
 // Reference:
-// 	RFC Section 4.14 - Structure
-// 	XDR encoded elements in the order of their declaration in the struct
-func (d *Decoder) decodeStruct(v reflect.Value) (int, error) {
+//
+//	RFC Section 4.14 - Structure
+//	XDR encoded elements in the order of their declaration in the struct
+func (d *Decoder) decodeStruct(v reflect.Value, maxDepth uint) (int, error) {
 	var n int
 	vt := v.Type()
 	for i := 0; i < v.NumField(); i++ {
@@ -648,7 +663,7 @@ func (d *Decoder) decodeStruct(v reflect.Value) (int, error) {
 					maxSize = dest.XDRMaxSize()
 				}
 
-				n2, err := d.decodeArray(vf, true, maxSize)
+				n2, err := d.decodeArray(vf, true, maxSize, maxDepth)
 				n += n2
 				if err != nil {
 					return n, err
@@ -656,7 +671,7 @@ func (d *Decoder) decodeStruct(v reflect.Value) (int, error) {
 				continue
 
 			case reflect.Array:
-				n2, err := d.decodeFixedArray(vf, true)
+				n2, err := d.decodeFixedArray(vf, true, maxDepth)
 				n += n2
 				if err != nil {
 					return n, err
@@ -676,7 +691,7 @@ func (d *Decoder) decodeStruct(v reflect.Value) (int, error) {
 		}
 
 		// Decode each struct field.
-		n2, err := d.decode(vf, maxSize)
+		n2, err := d.decode(vf, maxSize, maxDepth)
 		n += n2
 		if err != nil {
 			return n, err
@@ -703,7 +718,7 @@ func (d *Decoder) decodeStruct(v reflect.Value) (int, error) {
 //
 // An UnmarshalError is returned if any issues are encountered while decoding
 // the elements.
-func (d *Decoder) decodeMap(v reflect.Value) (int, error) {
+func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 	dataLen, n, err := d.DecodeUint()
 	if err != nil {
 		return n, err
@@ -720,14 +735,14 @@ func (d *Decoder) decodeMap(v reflect.Value) (int, error) {
 	elemType := vt.Elem()
 	for i := uint32(0); i < dataLen; i++ {
 		key := reflect.New(keyType).Elem()
-		n2, err := d.decode(key, 0)
+		n2, err := d.decode(key, 0, maxDepth)
 		n += n2
 		if err != nil {
 			return n, err
 		}
 
 		val := reflect.New(elemType).Elem()
-		n2, err = d.decode(val, 0)
+		n2, err = d.decode(val, 0, maxDepth)
 		n += n2
 		if err != nil {
 			return n, err
@@ -745,7 +760,7 @@ func (d *Decoder) decodeMap(v reflect.Value) (int, error) {
 //
 // An UnmarshalError is returned if any issues are encountered while decoding
 // the interface.
-func (d *Decoder) decodeInterface(v reflect.Value) (int, error) {
+func (d *Decoder) decodeInterface(v reflect.Value, maxDepth uint) (int, error) {
 	if v.IsNil() || !v.CanInterface() {
 		msg := fmt.Sprintf("can't decode to nil interface")
 		err := unmarshalError("decodeInterface", ErrNilInterface, msg,
@@ -767,15 +782,20 @@ func (d *Decoder) decodeInterface(v reflect.Value) (int, error) {
 			nil, nil)
 		return 0, err
 	}
-	return d.decode(ve, 0)
+	return d.decode(ve, 0, maxDepth)
 }
 
 // decode is the main workhorse for unmarshalling via reflection.  It uses
 // the passed reflection value to choose the XDR primitives to decode from
 // the encapsulated reader.  It is a recursive function,
-// so cyclic data structures are not supported and will result in an infinite
-// loop.  It returns the  the number of bytes actually read.
-func (d *Decoder) decode(ve reflect.Value, maxSize int) (int, error) {
+// so cyclic data structures are not supported and will result in an ErrMaxDecodingDepth
+// error.  It returns the number of bytes actually read.
+func (d *Decoder) decode(ve reflect.Value, maxSize int, maxDepth uint) (int, error) {
+	if maxDepth == 0 {
+		return 0, unmarshalError("decode", ErrMaxDecodingDepth, "maximum decoding depth reached", nil, nil)
+	}
+	maxDepth--
+
 	if !ve.IsValid() {
 		msg := fmt.Sprintf("type '%s' is not valid", ve.Kind().String())
 		err := unmarshalError("decode", ErrUnsupportedType, msg, nil, nil)
@@ -784,7 +804,7 @@ func (d *Decoder) decode(ve reflect.Value, maxSize int) (int, error) {
 
 	// Handle time.Time values by decoding them as an RFC3339 formatted
 	// string with nanosecond precision.  Check the type string rather
-	// than doing a full blown conversion to interface and type assertion
+	// than doing a full-blown conversion to interface and type assertion
 	// since checking a string is much quicker.
 	if ve.Type().String() == "time.Time" {
 		// Read the value as a string and parse it.
@@ -806,7 +826,7 @@ func (d *Decoder) decode(ve reflect.Value, maxSize int) (int, error) {
 	switch ve.Kind() {
 
 	case reflect.Ptr:
-		return d.decodePtr(ve)
+		return d.decodePtr(ve, maxDepth)
 
 	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int:
 		i, n, err := d.DecodeInt()
@@ -898,7 +918,7 @@ func (d *Decoder) decode(ve reflect.Value, maxSize int) (int, error) {
 		return n, nil
 
 	case reflect.Array:
-		n, err := d.decodeFixedArray(ve, false)
+		n, err := d.decodeFixedArray(ve, false, maxDepth)
 		if err != nil {
 			return n, err
 		}
@@ -909,7 +929,7 @@ func (d *Decoder) decode(ve reflect.Value, maxSize int) (int, error) {
 			maxSize = dest.XDRMaxSize()
 		}
 
-		n, err := d.decodeArray(ve, false, maxSize)
+		n, err := d.decodeArray(ve, false, maxSize, maxDepth)
 		if err != nil {
 			return n, err
 		}
@@ -920,24 +940,24 @@ func (d *Decoder) decode(ve reflect.Value, maxSize int) (int, error) {
 		// we need to init the union's value interface
 
 		if _, ok := ve.Interface().(Union); ok {
-			return d.decodeUnion(ve)
+			return d.decodeUnion(ve, maxDepth)
 		}
 
-		n, err := d.decodeStruct(ve)
+		n, err := d.decodeStruct(ve, maxDepth)
 		if err != nil {
 			return n, err
 		}
 		return n, nil
 
 	case reflect.Map:
-		n, err := d.decodeMap(ve)
+		n, err := d.decodeMap(ve, maxDepth)
 		if err != nil {
 			return n, err
 		}
 		return n, nil
 
 	case reflect.Interface:
-		n, err := d.decodeInterface(ve)
+		n, err := d.decodeInterface(ve, maxDepth)
 		if err != nil {
 			return n, err
 		}
@@ -996,7 +1016,7 @@ func allocPtrIfNil(v *reflect.Value) error {
 
 // decodePtr decodes a single tagged XDR pointer type: one 4-byte
 // boolean followed by an encoded referent, which is allocated if needed.
-func (d *Decoder) decodePtr(v reflect.Value) (int, error) {
+func (d *Decoder) decodePtr(v reflect.Value, maxDepth uint) (int, error) {
 
 	present, n, err := d.DecodeBool()
 
@@ -1013,7 +1033,7 @@ func (d *Decoder) decodePtr(v reflect.Value) (int, error) {
 		return n, err
 	}
 
-	n2, err := d.decode(v.Elem(), 0)
+	n2, err := d.decode(v.Elem(), 0, maxDepth)
 	return n + n2, err
 }
 
@@ -1032,6 +1052,10 @@ func (d *Decoder) indirectIfPtr(v reflect.Value) (reflect.Value, error) {
 // data instead of a user-supplied reader.  See the Unmarhsal documentation for
 // specifics.
 func (d *Decoder) Decode(v interface{}) (int, error) {
+	return d.DecodeWithMaxDepth(v, DecodeDefaultMaxDepth)
+}
+
+func (d *Decoder) DecodeWithMaxDepth(v interface{}, maxDepth uint) (int, error) {
 	if v == nil {
 		msg := "can't unmarshal to nil interface"
 		return 0, unmarshalError("Unmarshal", ErrNilInterface, msg, nil,
@@ -1052,7 +1076,7 @@ func (d *Decoder) Decode(v interface{}) (int, error) {
 		return 0, err
 	}
 
-	return d.decode(vv.Elem(), 0)
+	return d.decode(vv.Elem(), 0, maxDepth)
 }
 
 // NewDecoder returns a Decoder that can be used to manually decode XDR data

@@ -70,20 +70,24 @@ const (
 	// ErrBadUnionValue indicates a union's value is not populated when it should
 	// be
 	ErrBadUnionValue
+
+	// ErrMaxDecodingDepth indicates that the maximum decoding depth was reached
+	ErrMaxDecodingDepth
 )
 
 // Map of ErrorCode values back to their constant names for pretty printing.
 var errorCodeStrings = map[ErrorCode]string{
-	ErrBadArguments:    "ErrBadArguments",
-	ErrUnsupportedType: "ErrUnsupportedType",
-	ErrBadEnumValue:    "ErrBadEnumValue",
-	ErrNotSettable:     "ErrNotSettable",
-	ErrOverflow:        "ErrOverflow",
-	ErrNilInterface:    "ErrNilInterface",
-	ErrIO:              "ErrIO",
-	ErrParseTime:       "ErrParseTime",
-	ErrBadUnionSwitch:  "ErrBadUnionSwitch",
-	ErrBadUnionValue:   "ErrBadUnionValue",
+	ErrBadArguments:     "ErrBadArguments",
+	ErrUnsupportedType:  "ErrUnsupportedType",
+	ErrBadEnumValue:     "ErrBadEnumValue",
+	ErrNotSettable:      "ErrNotSettable",
+	ErrOverflow:         "ErrOverflow",
+	ErrNilInterface:     "ErrNilInterface",
+	ErrIO:               "ErrIO",
+	ErrParseTime:        "ErrParseTime",
+	ErrBadUnionSwitch:   "ErrBadUnionSwitch",
+	ErrBadUnionValue:    "ErrBadUnionValue",
+	ErrMaxDecodingDepth: "ErrMaxDecodingDepth",
 }
 
 // String returns the ErrorCode as a human-readable name.
@@ -122,7 +126,7 @@ func (e *UnmarshalError) Error() string {
 }
 
 // unmarshalError creates an error given a set of arguments and will copy byte
-// slices into the Value field since they might otherwise be changed from from
+// slices into the Value field since they might otherwise be changed from
 // the original value.
 func unmarshalError(f string, c ErrorCode, desc string, v interface{}, err error) *UnmarshalError {
 	e := &UnmarshalError{ErrorCode: c, Func: f, Description: desc, Err: err}

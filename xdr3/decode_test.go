@@ -745,7 +745,7 @@ func TestUnmarshalCorners(t *testing.T) {
 	testName = "Decode to unsettable pointer"
 	expectedN = 4
 	expectedErr = &UnmarshalError{ErrorCode: ErrNotSettable}
-	n, err = TstDecode(bytes.NewReader(buf))(reflect.ValueOf(i32p), 0)
+	n, err = TstDecode(bytes.NewReader(buf))(reflect.ValueOf(i32p), 0, DecodeDefaultMaxDepth)
 	testExpectedURet(t, testName, n, expectedN, err, expectedErr)
 
 	// Ensure unmarshal to indirected unsettable pointer returns the
@@ -787,7 +787,7 @@ func TestUnmarshalCorners(t *testing.T) {
 	testName = "Decode invalid reflect value"
 	expectedN = 0
 	expectedErr = error(&UnmarshalError{ErrorCode: ErrUnsupportedType})
-	n, err = TstDecode(bytes.NewReader(buf))(reflect.Value{}, 0)
+	n, err = TstDecode(bytes.NewReader(buf))(reflect.Value{}, 0, DecodeDefaultMaxDepth)
 	testExpectedURet(t, testName, n, expectedN, err, expectedErr)
 
 	// Ensure unmarshal to a slice with a cap and 0 length adjusts the
@@ -847,7 +847,7 @@ func TestUnmarshalCorners(t *testing.T) {
 	var ustruct unsettableStruct
 	expectedN = 0
 	expectedErr = error(&UnmarshalError{ErrorCode: ErrNotSettable})
-	n, err = TstDecode(bytes.NewReader(buf))(reflect.ValueOf(ustruct), 0)
+	n, err = TstDecode(bytes.NewReader(buf))(reflect.ValueOf(ustruct), 0, DecodeDefaultMaxDepth)
 	testExpectedURet(t, testName, n, expectedN, err, expectedErr)
 
 	// Ensure decode to struct with unsettable pointer fields return
@@ -859,7 +859,7 @@ func TestUnmarshalCorners(t *testing.T) {
 	var upstruct unsettablePointerStruct
 	expectedN = 0
 	expectedErr = error(&UnmarshalError{ErrorCode: ErrNotSettable})
-	n, err = TstDecode(bytes.NewReader(buf))(reflect.ValueOf(upstruct), 0)
+	n, err = TstDecode(bytes.NewReader(buf))(reflect.ValueOf(upstruct), 0, DecodeDefaultMaxDepth)
 	testExpectedURet(t, testName, n, expectedN, err, expectedErr)
 }
 
@@ -1132,4 +1132,26 @@ func TestDecodeUnionIntoExistingObject(t *testing.T) {
 	if *s.Text != sdata {
 		t.Error("Text does not match")
 	}
+}
+
+func TestDecodeMaxDepth(t *testing.T) {
+	var buf bytes.Buffer
+	data := "data"
+	_, err := Marshal(&buf, structWithPointer{Data: &data})
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	bufCopy := buf
+	decoder := NewDecoder(&bufCopy)
+	var s structWithPointer
+	_, err = decoder.DecodeWithMaxDepth(&s, 3)
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	bufCopy = buf
+	decoder = NewDecoder(&bufCopy)
+	_, err = decoder.DecodeWithMaxDepth(&s, 2)
+	assertError(t, "", err, &UnmarshalError{ErrorCode: ErrMaxDecodingDepth})
 }

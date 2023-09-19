@@ -54,16 +54,16 @@ by v and performs a mapping of Go types to the underlying XDR types as follows:
 
 Notes and Limitations:
 
-	* Automatic marshalling of variable and fixed-length arrays of uint8s
-	  requires a special struct tag `xdropaque:"false"` since byte slices and
-	  byte arrays are assumed to be opaque data and byte is a Go alias for uint8
-	  thus indistinguishable under reflection
-	* Channel, complex, and function types cannot be encoded
-	* Interfaces without a concrete value cannot be encoded
-	* Cyclic data structures are not supported and will result in infinite loops
-	* Strings are marshalled with UTF-8 character encoding which differs from
-	  the XDR specification of ASCII, however UTF-8 is backwards compatible with
-	  ASCII so this should rarely cause issues
+  - Automatic marshalling of variable and fixed-length arrays of uint8s
+    requires a special struct tag `xdropaque:"false"` since byte slices and
+    byte arrays are assumed to be opaque data and byte is a Go alias for uint8
+    thus indistinguishable under reflection
+  - Channel, complex, and function types cannot be encoded
+  - Interfaces without a concrete value cannot be encoded
+  - Cyclic data structures are not supported and will result in infinite loops
+  - Strings are marshalled with UTF-8 character encoding which differs from
+    the XDR specification of ASCII, however UTF-8 is backwards compatible with
+    ASCII so this should rarely cause issues
 
 If any issues are encountered during the marshalling process, a MarshalError is
 returned with a human readable description as well as an ErrorCode value for
@@ -109,8 +109,9 @@ type Encoder struct {
 // internal data slice.
 //
 // Reference:
-// 	RFC Section 4.1 - Integer
-// 	32-bit big-endian signed integer in range [-2147483648, 2147483647]
+//
+//	RFC Section 4.1 - Integer
+//	32-bit big-endian signed integer in range [-2147483648, 2147483647]
 func (enc *Encoder) EncodeInt(v int32) (err error) {
 	b := make([]byte, 4, 4)
 	b[0] = byte(v >> 24)
@@ -134,8 +135,9 @@ func (enc *Encoder) EncodeInt(v int32) (err error) {
 // internal data slice.
 //
 // Reference:
-// 	RFC Section 4.2 - Unsigned Integer
-// 	32-bit big-endian unsigned integer in range [0, 4294967295]
+//
+//	RFC Section 4.2 - Unsigned Integer
+//	32-bit big-endian unsigned integer in range [0, 4294967295]
 func (enc *Encoder) EncodeUint(v uint32) (err error) {
 	b := make([]byte, 4, 4)
 	b[0] = byte(v >> 24)
@@ -160,8 +162,9 @@ func (enc *Encoder) EncodeUint(v uint32) (err error) {
 // valid values or appending the data would overflow the internal data slice.
 //
 // Reference:
-// 	RFC Section 4.3 - Enumeration
-// 	Represented as an XDR encoded signed integer
+//
+//	RFC Section 4.3 - Enumeration
+//	Represented as an XDR encoded signed integer
 func (enc *Encoder) EncodeEnum(v int32, validEnums map[int32]bool) (err error) {
 	if !validEnums[v] {
 		err = marshalError("EncodeEnum", ErrBadEnumValue, "invalid enum", v)
@@ -177,8 +180,9 @@ func (enc *Encoder) EncodeEnum(v int32, validEnums map[int32]bool) (err error) {
 // internal data slice.
 //
 // Reference:
-// 	RFC Section 4.4 - Boolean
-// 	Represented as an XDR encoded enumeration where 0 is false and 1 is true
+//
+//	RFC Section 4.4 - Boolean
+//	Represented as an XDR encoded enumeration where 0 is false and 1 is true
 func (enc *Encoder) EncodeBool(v bool) (err error) {
 	i := int32(0)
 	if v == true {
@@ -194,8 +198,9 @@ func (enc *Encoder) EncodeBool(v bool) (err error) {
 // internal data slice.
 //
 // Reference:
-// 	RFC Section 4.5 - Hyper Integer
-// 	64-bit big-endian signed integer in range [-9223372036854775808, 9223372036854775807]
+//
+//	RFC Section 4.5 - Hyper Integer
+//	64-bit big-endian signed integer in range [-9223372036854775808, 9223372036854775807]
 func (enc *Encoder) EncodeHyper(v int64) (err error) {
 	b := make([]byte, 8, 8)
 	b[0] = byte(v >> 56)
@@ -223,8 +228,9 @@ func (enc *Encoder) EncodeHyper(v int64) (err error) {
 // internal data slice.
 //
 // Reference:
-// 	RFC Section 4.5 - Unsigned Hyper Integer
-// 	64-bit big-endian unsigned integer in range [0, 18446744073709551615]
+//
+//	RFC Section 4.5 - Unsigned Hyper Integer
+//	64-bit big-endian unsigned integer in range [0, 18446744073709551615]
 func (enc *Encoder) EncodeUhyper(v uint64) (err error) {
 	b := make([]byte, 8, 8)
 	b[0] = byte(v >> 56)
@@ -252,8 +258,9 @@ func (enc *Encoder) EncodeUhyper(v uint64) (err error) {
 // internal data slice.
 //
 // Reference:
-// 	RFC Section 4.6 - Floating Point
-// 	32-bit single-precision IEEE 754 floating point
+//
+//	RFC Section 4.6 - Floating Point
+//	32-bit single-precision IEEE 754 floating point
 func (enc *Encoder) EncodeFloat(v float32) (err error) {
 	ui := math.Float32bits(v)
 	return enc.EncodeUint(ui)
@@ -266,8 +273,9 @@ func (enc *Encoder) EncodeFloat(v float32) (err error) {
 // internal data slice.
 //
 // Reference:
-// 	RFC Section 4.7 -  Double-Precision Floating Point
-// 	64-bit double-precision IEEE 754 floating point
+//
+//	RFC Section 4.7 -  Double-Precision Floating Point
+//	64-bit double-precision IEEE 754 floating point
 func (enc *Encoder) EncodeDouble(v float64) (err error) {
 	ui := math.Float64bits(v)
 	return enc.EncodeUhyper(ui)
@@ -284,8 +292,9 @@ func (enc *Encoder) EncodeDouble(v float64) (err error) {
 // internal data slice.
 //
 // Reference:
-// 	RFC Section 4.9 - Fixed-Length Opaque Data
-// 	Fixed-length uninterpreted data zero-padded to a multiple of four
+//
+//	RFC Section 4.9 - Fixed-Length Opaque Data
+//	Fixed-length uninterpreted data zero-padded to a multiple of four
 func (enc *Encoder) EncodeFixedOpaque(v []byte) (err error) {
 	l := len(v)
 	pad := (4 - (l % 4)) % 4
@@ -315,8 +324,9 @@ func (enc *Encoder) EncodeFixedOpaque(v []byte) (err error) {
 // supports.
 //
 // Reference:
-// 	RFC Section 4.10 - Variable-Length Opaque Data
-// 	Unsigned integer length followed by fixed opaque data of that length
+//
+//	RFC Section 4.10 - Variable-Length Opaque Data
+//	Unsigned integer length followed by fixed opaque data of that length
 func (enc *Encoder) EncodeOpaque(v []byte) (err error) {
 	dataLen := len(v)
 	if uint(dataLen) > math.MaxUint32 {
@@ -341,8 +351,9 @@ func (enc *Encoder) EncodeOpaque(v []byte) (err error) {
 // internal data slice or the length of the string is larger than XDR supports.
 //
 // Reference:
-// 	RFC Section 4.11 - String
-// 	Unsigned integer length followed by bytes zero-padded to a multiple of four
+//
+//	RFC Section 4.11 - String
+//	Unsigned integer length followed by bytes zero-padded to a multiple of four
 func (enc *Encoder) EncodeString(v string) (err error) {
 	dataLen := len(v)
 	if uint(dataLen) > math.MaxUint32 {
@@ -366,8 +377,9 @@ func (enc *Encoder) EncodeString(v string) (err error) {
 // the array elements.
 //
 // Reference:
-// 	RFC Section 4.12 - Fixed-Length Array
-// 	Individually XDR encoded array elements
+//
+//	RFC Section 4.12 - Fixed-Length Array
+//	Individually XDR encoded array elements
 func (enc *Encoder) encodeFixedArray(v reflect.Value, ignoreOpaque bool) (err error) {
 	// Treat [#]byte (byte is alias for uint8) as opaque data unless ignored.
 	if !ignoreOpaque && v.Type().Elem().Kind() == reflect.Uint8 {
@@ -408,8 +420,9 @@ func (enc *Encoder) encodeFixedArray(v reflect.Value, ignoreOpaque bool) (err er
 // the array elements.
 //
 // Reference:
-// 	RFC Section 4.13 - Variable-Length Array
-// 	Unsigned integer length followed by individually XDR encoded array elements
+//
+//	RFC Section 4.13 - Variable-Length Array
+//	Unsigned integer length followed by individually XDR encoded array elements
 func (enc *Encoder) encodeArray(v reflect.Value, ignoreOpaque bool) (err error) {
 	numItems := uint32(v.Len())
 	err = enc.encode(reflect.ValueOf(numItems))
@@ -429,8 +442,9 @@ func (enc *Encoder) encodeArray(v reflect.Value, ignoreOpaque bool) (err error) 
 // the elements.
 //
 // Reference:
-// 	RFC Section 4.14 - Structure
-// 	XDR encoded elements in the order of their declaration in the struct
+//
+//	RFC Section 4.14 - Structure
+//	XDR encoded elements in the order of their declaration in the struct
 func (enc *Encoder) encodeStruct(v reflect.Value) (err error) {
 	vt := v.Type()
 	for i := 0; i < v.NumField(); i++ {

@@ -43,7 +43,8 @@ const (
 	ErrNotSettable
 
 	// ErrOverflow indicates that the data in question is too large to fit
-	// into the corresponding Go or XDR data type.  For example, an integer
+	// into the corresponding Go or XDR data type or that allocating it exceeds the
+	// maximum allocation size limit.  For example, an integer
 	// decoded from XDR that is too large to fit into a target type of int8,
 	// or opaque data that exceeds the max length of a Go slice.
 	ErrOverflow

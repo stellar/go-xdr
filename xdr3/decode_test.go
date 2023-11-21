@@ -18,6 +18,7 @@ package xdr_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"reflect"
@@ -1143,20 +1144,20 @@ func TestDecodeMaxDepth(t *testing.T) {
 	}
 
 	bufCopy := buf
-	decoder := NewDecoder(&bufCopy)
+	decoder := NewDecoderWithOptions(&bufCopy, DecodeOptions{MaxDepth: 3})
 	var s structWithPointer
-	_, err = decoder.DecodeWithMaxDepth(&s, 3)
+	_, err = decoder.Decode(&s)
 	if err != nil {
 		t.Error("unexpected error")
 	}
 
 	bufCopy = buf
-	decoder = NewDecoder(&bufCopy)
-	_, err = decoder.DecodeWithMaxDepth(&s, 2)
+	decoder = NewDecoderWithOptions(&bufCopy, DecodeOptions{MaxDepth: 2})
+	_, err = decoder.Decode(&s)
 	assertError(t, "", err, &UnmarshalError{ErrorCode: ErrMaxDecodingDepth})
 }
 
-func TestDecodeMaxAllocationCheck(t *testing.T) {
+func TestDecodeMaxAllocationCheck_ImplicitLenReader(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := Marshal(&buf, "thisstringis23charslong")
 	if err != nil {
@@ -1164,12 +1165,30 @@ func TestDecodeMaxAllocationCheck(t *testing.T) {
 	}
 
 	// Reduce the buffer size so that the length of the buffer
-	// is shorter than the encoded string length
+	// is shorter than the encoded XDR  length
 	buf.Truncate(buf.Len() - 4)
 
-	bufCopy := buf
-	decoder := NewDecoder(&bufCopy)
+	decoder := NewDecoder(&buf)
 	var s string
-	_, err = decoder.DecodeWithMaxDepth(&s, DecodeDefaultMaxDepth)
+	_, err = decoder.Decode(&s)
+	assertError(t, "", err, &UnmarshalError{ErrorCode: ErrOverflow})
+}
+
+func TestDecodeMaxAllocationCheck_ExplicitLenReader(t *testing.T) {
+	var buf bytes.Buffer
+	encoder := base64.NewEncoder(base64.StdEncoding, &buf)
+	_, err := Marshal(encoder, "thisstringis23charslong")
+	if err != nil {
+		t.Error("unexpected error")
+	}
+
+	xdrLen := base64.StdEncoding.DecodedLen(buf.Len())
+	// Reduce the buffer size so that the length of the buffer
+	// is shorter than the encoded XDR length
+	reducedLen := xdrLen - 4
+
+	decoder := NewDecoderWithOptions(&buf, DecodeOptions{MaxInputLen: reducedLen})
+	var s string
+	_, err = decoder.Decode(&s)
 	assertError(t, "", err, &UnmarshalError{ErrorCode: ErrOverflow})
 }

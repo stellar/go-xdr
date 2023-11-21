@@ -33,6 +33,28 @@ var errIODecode = "%s while decoding %d bytes"
 // DecodeDefaultMaxDepth is the default maximum decoding depth
 const DecodeDefaultMaxDepth = 200
 
+// DecodeOptions configures how Decoding is done.
+type DecodeOptions struct {
+	// MaxDepth is the maximum decoding depth (i.e. maximum nesting of data structures).
+	// It prevents infinite recursions in cyclic datastructures and determines the maximum callstack growth.
+	// If set to 0, DecodeDefaultMaxDepth will be used.
+	MaxDepth uint
+
+	// MaxInputLen sets the maximum input size. It is used by the decoder to sanity-check
+	// allocation sizes and avoid heap explosions from doctored inputs.
+	//
+	// If set to 0, the decoder will try to figure out the input size by checking whether
+	// the provided io.Reader implements Len() (e.g. strings.Reader, bytes.Reader and bytes.Buffer do).
+	// Otherwise, no sanity checks will be done.
+	MaxInputLen int
+}
+
+// DefaultDecodeOptions are the default decoding options.
+var DefaultDecodeOptions = DecodeOptions{
+	MaxDepth:    DecodeDefaultMaxDepth,
+	MaxInputLen: 0,
+}
+
 /*
 Unmarshal parses XDR-encoded data into the value pointed to by v reading from
 reader r and returning the total number of bytes read.  An addressable pointer
@@ -66,7 +88,7 @@ by v and performs a mapping of underlying XDR types to Go types as follows:
 Notes and Limitations:
 
   - Automatic unmarshalling of variable and fixed-length arrays of uint8s
-    requires a special struct tag `xdropaque:"false"` since byte slices
+    requires a special struct tag xdropaque:"false" since byte slices
     and byte arrays are assumed to be opaque data and byte is a Go alias
     for uint8 thus indistinguishable under reflection
   - Cyclic data structures are not supported and will result in ErrMaxDecodingDepth errors
@@ -78,12 +100,15 @@ potential issues are unsupported Go types, attempting to decode a value which is
 too large to fit into a specified Go type, and exceeding max slice limitations.
 */
 func Unmarshal(r io.Reader, v interface{}) (int, error) {
-	d := newDecoder(r)
+	d := NewDecoder(r)
 	return d.Decode(v)
 }
 
-// lenLeft tells you how many bytes are left to read.
-// It is satisfied by io.Readers like bytes.Buffer, bytes.Reader
+// UnmarshalWithOptions works like Unmarshal but accepts decoding options.
+func UnmarshalWithOptions(r io.Reader, v interface{}, options DecodeOptions) (int, error) {
+	d := NewDecoderWithOptions(r, options)
+	return d.Decode(v)
+}
 
 type lenLeft interface {
 	Len() int
@@ -95,7 +120,7 @@ type lenLeft interface {
 // used to get a new Decoder directly.
 //
 // Typically, Unmarshal should be used instead of manual decoding.  A Decoder
-// is exposed so it is possible to perform manual decoding should it be
+// is exposed, so it is possible to perform manual decoding should it be
 // necessary in complex scenarios where automatic reflection-based decoding
 // won't work.
 type Decoder struct {
@@ -103,14 +128,53 @@ type Decoder struct {
 	scratchBuf [8]byte
 	r          io.Reader
 	l          lenLeft
+	maxDepth   uint
 }
 
-func newDecoder(r io.Reader) *Decoder {
-	d := &Decoder{r: r}
-	if l, ok := r.(lenLeft); ok {
-		d.l = l
+// readerLenWrapper wraps a reader an initial length and provides a Len() method indicating
+// how much input is left
+type readerLenWrapper struct {
+	inner      io.Reader
+	readCount  int
+	initialLen int
+}
+
+func (l *readerLenWrapper) Len() int {
+	return l.initialLen - l.readCount
+}
+
+func (l *readerLenWrapper) Read(p []byte) (int, error) {
+	n, err := l.inner.Read(p)
+	if n > 0 {
+		l.readCount += n
 	}
-	return d
+	return n, err
+}
+
+// NewDecoder returns a Decoder that can be used to manually decode XDR data
+// from a provided reader. Typically, Unmarshal should be used instead of
+// manually creating a Decoder.
+func NewDecoder(r io.Reader) *Decoder {
+	return NewDecoderWithOptions(r, DefaultDecodeOptions)
+}
+
+// NewDecoderWithOptions works like NewDecoder but allows supplying decoding options.
+func NewDecoderWithOptions(r io.Reader, options DecodeOptions) *Decoder {
+	maxDepth := options.MaxDepth
+	if maxDepth < 1 {
+		maxDepth = DecodeDefaultMaxDepth
+	}
+	if l, ok := r.(lenLeft); ok {
+		return &Decoder{r: r, l: l, maxDepth: maxDepth}
+	}
+	if options.MaxInputLen > 0 {
+		rlw := &readerLenWrapper{
+			inner:      r,
+			initialLen: options.MaxInputLen,
+		}
+		return &Decoder{r: rlw, l: rlw, maxDepth: maxDepth}
+	}
+	return &Decoder{r: r, l: nil, maxDepth: options.MaxDepth}
 }
 
 // DecodeInt treats the next 4 bytes as an XDR encoded integer and returns the
@@ -753,7 +817,6 @@ func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 	// Allocate storage for the underlying map if needed.
 	vt := v.Type()
 	if v.IsNil() {
-		// We assume that the map allocation won't exceed d.maxAllocSize
 		v.Set(reflect.MakeMap(vt))
 	}
 
@@ -1089,11 +1152,6 @@ func (d *Decoder) indirectIfPtr(v reflect.Value) (reflect.Value, error) {
 // data instead of a user-supplied reader. See the Unmarhsal documentation for
 // specifics. Decode(v) is equivalent to DecodeWithMaxDepth(v, DecodeDefaultMaxDepth)
 func (d *Decoder) Decode(v interface{}) (int, error) {
-	return d.DecodeWithMaxDepth(v, DecodeDefaultMaxDepth)
-}
-
-// DecodeWithMaxDepth behaves like Decode, except an explicit maximum decoding depth is used
-func (d *Decoder) DecodeWithMaxDepth(v interface{}, maxDepth uint) (int, error) {
 	if v == nil {
 		msg := "can't unmarshal to nil interface"
 		return 0, unmarshalError("Unmarshal", ErrNilInterface, msg, nil,
@@ -1114,7 +1172,7 @@ func (d *Decoder) DecodeWithMaxDepth(v interface{}, maxDepth uint) (int, error) 
 		return 0, err
 	}
 
-	return d.decode(vv.Elem(), 0, maxDepth)
+	return d.decode(vv.Elem(), 0, d.maxDepth)
 }
 
 // InputLen returns the size left to read from the decoder's input if available
@@ -1123,11 +1181,4 @@ func (d *Decoder) InputLen() (int, bool) {
 		return 0, false
 	}
 	return d.l.Len(), true
-}
-
-// NewDecoder returns a Decoder that can be used to manually decode XDR data
-// from a provided reader.  Typically, Unmarshal should be used instead of
-// manually creating a Decoder.
-func NewDecoder(r io.Reader) *Decoder {
-	return newDecoder(r)
 }

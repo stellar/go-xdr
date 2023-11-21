@@ -399,7 +399,7 @@ func (d *Decoder) DecodeOpaque(maxSize int) ([]byte, int, error) {
 		return nil, n, err
 	}
 
-	maxSize = d.mergeLenLeftAndMaxSize(maxSize)
+	maxSize = d.mergeInputLenAndMaxSize(maxSize)
 	if maxSize == 0 {
 		maxSize = maxInt32
 	}
@@ -439,7 +439,7 @@ func (d *Decoder) DecodeString(maxSize int) (string, int, error) {
 		return "", n, err
 	}
 
-	maxSize = d.mergeLenLeftAndMaxSize(maxSize)
+	maxSize = d.mergeInputLenAndMaxSize(maxSize)
 	if maxSize == 0 {
 		maxSize = maxInt32
 	}
@@ -513,7 +513,7 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int, m
 		return n, err
 	}
 
-	maxSize = d.mergeLenLeftAndMaxSize(maxSize)
+	maxSize = d.mergeInputLenAndMaxSize(maxSize)
 	if maxSize == 0 {
 		maxSize = maxInt32
 	}
@@ -744,8 +744,7 @@ func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 	if err != nil {
 		return n, err
 	}
-	if d.l != nil {
-		left := d.l.Len()
+	if left, ok := d.InputLen(); ok {
 		if uint(left) < uint(dataLen) {
 			return 0, unmarshalError("decodeMap", ErrOverflow, errMaxSlice, dataLen, nil)
 		}
@@ -813,10 +812,10 @@ func (d *Decoder) decodeInterface(v reflect.Value, maxDepth uint) (int, error) {
 	return d.decode(ve, 0, maxDepth)
 }
 
-func (d *Decoder) mergeLenLeftAndMaxSize(maxSize int) int {
-	if d.l != nil {
-		if maxSize == 0 || d.l.Len() < maxSize {
-			return d.l.Len()
+func (d *Decoder) mergeInputLenAndMaxSize(maxSize int) int {
+	if left, ok := d.InputLen(); ok {
+		if maxSize == 0 || left < maxSize {
+			return left
 		}
 	}
 	return maxSize
@@ -1116,6 +1115,14 @@ func (d *Decoder) DecodeWithMaxDepth(v interface{}, maxDepth uint) (int, error) 
 	}
 
 	return d.decode(vv.Elem(), 0, maxDepth)
+}
+
+// InputLen returns the size left to read from the decoder's input if available
+func (d *Decoder) InputLen() (int, bool) {
+	if d.l == nil {
+		return 0, false
+	}
+	return d.l.Len(), true
 }
 
 // NewDecoder returns a Decoder that can be used to manually decode XDR data

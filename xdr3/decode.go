@@ -746,7 +746,7 @@ func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 	}
 	if left, ok := d.InputLen(); ok {
 		if uint(left) < uint(dataLen) {
-			return 0, unmarshalError("decodeMap", ErrOverflow, errMaxSlice, dataLen, nil)
+			return n, unmarshalError("decodeMap", ErrOverflow, errMaxSlice, dataLen, nil)
 		}
 	}
 

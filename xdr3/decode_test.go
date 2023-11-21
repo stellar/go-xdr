@@ -361,7 +361,7 @@ func TestUnmarshal(t *testing.T) {
 		// element no extra bytes, 1 map element not enough bytes for
 		// key, 1 map element not enough bytes for value.
 		{[]byte{0x00, 0x00, 0x00}, map[string]uint32{}, 3, &UnmarshalError{ErrorCode: ErrIO}},
-		{[]byte{0x00, 0x00, 0x00, 0x01}, map[string]uint32{}, 4, &UnmarshalError{ErrorCode: ErrIO}},
+		{[]byte{0x00, 0x00, 0x00, 0x01}, map[string]uint32{}, 4, &UnmarshalError{ErrorCode: ErrOverflow}},
 		{[]byte{0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00}, map[string]uint32{}, 7, &UnmarshalError{ErrorCode: ErrIO}},
 		{[]byte{0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x6D, 0x61, 0x70, 0x31},
 			map[string]uint32{}, 12, &UnmarshalError{ErrorCode: ErrIO}},

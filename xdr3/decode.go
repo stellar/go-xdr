@@ -28,7 +28,6 @@ import (
 const maxInt32 = math.MaxInt32
 
 var errMaxSlice = "data exceeds max slice limit"
-var errMaxAllocation = "allocation would exceed the maximum limit"
 var errIODecode = "%s while decoding %d bytes"
 
 // DecodeDefaultMaxDepth is the default maximum decoding depth
@@ -79,8 +78,15 @@ potential issues are unsupported Go types, attempting to decode a value which is
 too large to fit into a specified Go type, and exceeding max slice limitations.
 */
 func Unmarshal(r io.Reader, v interface{}) (int, error) {
-	d := Decoder{r: r}
+	d := newDecoder(r)
 	return d.Decode(v)
+}
+
+// lenLeft tells you how many bytes are left to read.
+// It is satisfied by io.Readers like bytes.Buffer, bytes.Reader
+
+type lenLeft interface {
+	Len() int
 }
 
 // A Decoder wraps an io.Reader that is expected to provide an XDR-encoded byte
@@ -94,9 +100,17 @@ func Unmarshal(r io.Reader, v interface{}) (int, error) {
 // won't work.
 type Decoder struct {
 	// used to minimize heap allocations during decoding
-	scratchBuf   [8]byte
-	r            io.Reader
-	maxAllocSize int
+	scratchBuf [8]byte
+	r          io.Reader
+	l          lenLeft
+}
+
+func newDecoder(r io.Reader) *Decoder {
+	d := &Decoder{r: r}
+	if l, ok := r.(lenLeft); ok {
+		d.l = l
+	}
+	return d
 }
 
 // DecodeInt treats the next 4 bytes as an XDR encoded integer and returns the
@@ -385,6 +399,7 @@ func (d *Decoder) DecodeOpaque(maxSize int) ([]byte, int, error) {
 		return nil, n, err
 	}
 
+	maxSize = d.mergeLenLeftAndMaxSize(maxSize)
 	if maxSize == 0 {
 		maxSize = maxInt32
 	}
@@ -424,6 +439,7 @@ func (d *Decoder) DecodeString(maxSize int) (string, int, error) {
 		return "", n, err
 	}
 
+	maxSize = d.mergeLenLeftAndMaxSize(maxSize)
 	if maxSize == 0 {
 		maxSize = maxInt32
 	}
@@ -497,6 +513,7 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int, m
 		return n, err
 	}
 
+	maxSize = d.mergeLenLeftAndMaxSize(maxSize)
 	if maxSize == 0 {
 		maxSize = maxInt32
 	}
@@ -511,10 +528,6 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int, m
 	// existing slice does not have enough capacity.
 	sliceLen := int(dataLen)
 	if v.Cap() < sliceLen {
-		growth := (sliceLen - v.Cap()) * int(v.Type().Size())
-		if growth > d.maxAllocSize {
-			return 0, unmarshalError("decodeArray", ErrOverflow, errMaxAllocation, nil, nil)
-		}
 		v.Set(reflect.MakeSlice(v.Type(), sliceLen, sliceLen))
 	}
 	v.SetLen(sliceLen)
@@ -598,9 +611,6 @@ func (d *Decoder) decodeUnion(v reflect.Value, maxDepth uint) (int, error) {
 	vv := v.FieldByName(arm)
 
 	vvet := vv.Type().Elem()
-	if d.maxAllocSize < int(vvet.Size()) {
-		return 0, unmarshalError("decode", ErrOverflow, errMaxAllocation, nil, nil)
-	}
 	vv.Set(reflect.New(vvet))
 
 	field, ok := v.Type().FieldByName(arm)
@@ -734,6 +744,12 @@ func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 	if err != nil {
 		return n, err
 	}
+	if d.l != nil {
+		left := d.l.Len()
+		if uint(left) < uint(dataLen) {
+			return 0, unmarshalError("decodeMap", ErrOverflow, errMaxSlice, dataLen, nil)
+		}
+	}
 
 	// Allocate storage for the underlying map if needed.
 	vt := v.Type()
@@ -745,9 +761,6 @@ func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 	// Decode each key and value according to their type.
 	keyType := vt.Key()
 	elemType := vt.Elem()
-	if uintptr(d.maxAllocSize) < keyType.Size()+elemType.Size()*uintptr(dataLen) {
-		return 0, unmarshalError("decode", ErrOverflow, errMaxAllocation, nil, nil)
-	}
 	for i := uint32(0); i < dataLen; i++ {
 		key := reflect.New(keyType).Elem()
 		n2, err := d.decode(key, 0, maxDepth)
@@ -800,10 +813,11 @@ func (d *Decoder) decodeInterface(v reflect.Value, maxDepth uint) (int, error) {
 	return d.decode(ve, 0, maxDepth)
 }
 
-func (d *Decoder) mergeMaxAllocSizeAndMaxSize(maxSize int) int {
-	if maxSize == 0 ||
-		d.maxAllocSize < maxSize {
-		return d.maxAllocSize
+func (d *Decoder) mergeLenLeftAndMaxSize(maxSize int) int {
+	if d.l != nil {
+		if maxSize == 0 || d.l.Len() < maxSize {
+			return d.l.Len()
+		}
 	}
 	return maxSize
 }
@@ -831,7 +845,6 @@ func (d *Decoder) decode(ve reflect.Value, maxSize int, maxDepth uint) (int, err
 	// since checking a string is much quicker.
 	if ve.Type().String() == "time.Time" {
 		// Read the value as a string and parse it.
-		maxSize = d.mergeMaxAllocSizeAndMaxSize(maxSize)
 		timeString, n, err := d.DecodeString(maxSize)
 		if err != nil {
 			return n, err
@@ -934,7 +947,6 @@ func (d *Decoder) decode(ve reflect.Value, maxSize int, maxDepth uint) (int, err
 			maxSize = dest.XDRMaxSize()
 		}
 
-		maxSize = d.mergeMaxAllocSizeAndMaxSize(maxSize)
 		s, n, err := d.DecodeString(maxSize)
 		if err != nil {
 			return n, err
@@ -1035,9 +1047,6 @@ func (d *Decoder) allocPtrIfNil(v *reflect.Value) error {
 	}
 	if isNil {
 		vet := v.Type().Elem()
-		if d.maxAllocSize < int(vet.Size()) {
-			return unmarshalError("decode", ErrOverflow, errMaxAllocation, nil, nil)
-		}
 		v.Set(reflect.New(vet))
 	}
 	return nil
@@ -1081,25 +1090,11 @@ func (d *Decoder) indirectIfPtr(v reflect.Value) (reflect.Value, error) {
 // data instead of a user-supplied reader. See the Unmarhsal documentation for
 // specifics. Decode(v) is equivalent to DecodeWithMaxDepth(v, DecodeDefaultMaxDepth)
 func (d *Decoder) Decode(v interface{}) (int, error) {
-	return d.DecodeWithMaxDepthAndMaxAllocSize(v, DecodeDefaultMaxDepth, 0)
+	return d.DecodeWithMaxDepth(v, DecodeDefaultMaxDepth)
 }
 
 // DecodeWithMaxDepth behaves like Decode, except an explicit maximum decoding depth is used
 func (d *Decoder) DecodeWithMaxDepth(v interface{}, maxDepth uint) (int, error) {
-	return d.DecodeWithMaxDepthAndMaxAllocSize(v, maxDepth, 0)
-}
-
-// DecodeWithMaxDepthAndMaxAllocSize behaves like DecodeWithMaxDepth, except an explicit maximum
-// allocation size is used. This is meant to protect against XDR doctored to cause a heap explosion.
-// The decoder won't make any allocation larger than maxAllocSize
-func (d *Decoder) DecodeWithMaxDepthAndMaxAllocSize(v interface{}, maxDepth uint, maxAllocSize int) (int, error) {
-	if maxAllocSize == 0 {
-		maxAllocSize = maxInt32
-	}
-	d.maxAllocSize = maxAllocSize
-	defer func() {
-		d.maxAllocSize = 0
-	}()
 	if v == nil {
 		msg := "can't unmarshal to nil interface"
 		return 0, unmarshalError("Unmarshal", ErrNilInterface, msg, nil,
@@ -1127,5 +1122,5 @@ func (d *Decoder) DecodeWithMaxDepthAndMaxAllocSize(v interface{}, maxDepth uint
 // from a provided reader.  Typically, Unmarshal should be used instead of
 // manually creating a Decoder.
 func NewDecoder(r io.Reader) *Decoder {
-	return &Decoder{r: r}
+	return newDecoder(r)
 }

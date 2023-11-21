@@ -1156,23 +1156,20 @@ func TestDecodeMaxDepth(t *testing.T) {
 	assertError(t, "", err, &UnmarshalError{ErrorCode: ErrMaxDecodingDepth})
 }
 
-func TestDecodeMaxAllocSize(t *testing.T) {
+func TestDecodeMaxAllocationCheck(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := Marshal(&buf, "thisstringis23charslong")
 	if err != nil {
 		t.Error("unexpected error")
 	}
 
+	// Reduce the buffer size so that the length of the buffer
+	// is shorter than the encoded string length
+	buf.Truncate(buf.Len() - 4)
+
 	bufCopy := buf
 	decoder := NewDecoder(&bufCopy)
 	var s string
-	_, err = decoder.DecodeWithMaxDepthAndMaxAllocSize(&s, DecodeDefaultMaxDepth, 23)
-	if err != nil {
-		t.Error("unexpected error")
-	}
-
-	bufCopy = buf
-	decoder = NewDecoder(&bufCopy)
-	_, err = decoder.DecodeWithMaxDepthAndMaxAllocSize(&s, DecodeDefaultMaxDepth, 22)
+	_, err = decoder.DecodeWithMaxDepth(&s, DecodeDefaultMaxDepth)
 	assertError(t, "", err, &UnmarshalError{ErrorCode: ErrOverflow})
 }

@@ -34,10 +34,3 @@ func TstEncode(w io.Writer) func(v reflect.Value) (int, error) {
 	enc := NewEncoder(w)
 	return enc.encode
 }
-
-// TstDecode creates a new Decoder for the passed reader and returns the
-// internal decode function on the Decoder.
-func TstDecode(r io.Reader) func(v reflect.Value, maxLen int, maxDepth uint) (int, error) {
-	dec := NewDecoder(r)
-	return dec.decode
-}

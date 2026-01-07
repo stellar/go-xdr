@@ -26,6 +26,72 @@ import (
 	. "github.com/stellar/go-xdr/xdr3"
 )
 
+// subTest is used to allow testing of the Marshal function into struct fields
+// which are structs themselves.
+type subTest struct {
+	A string
+	B uint8
+}
+
+// allTypesTest is used to allow testing of the Marshal function into struct
+// fields of all supported types.
+type allTypesTest struct {
+	A int8
+	B uint8
+	C int16
+	D uint16
+	E int32
+	F uint32
+	G int64
+	H uint64
+	I bool
+	J float32
+	K float64
+	L string
+	M []byte
+	N [3]byte
+	O []int16
+	P [2]subTest
+	Q subTest
+	R map[string]uint32
+	S time.Time
+}
+
+// opaqueStruct is used to test handling of uint8 slices and arrays.
+type opaqueStruct struct {
+	Slice []uint8  `xdropaque:"false"`
+	Array [1]uint8 `xdropaque:"false"`
+}
+
+type AnEnum int32
+
+func (e AnEnum) ValidEnum(v int32) bool {
+	return v < 3
+}
+
+type aUnion struct {
+	Type AnEnum
+	Data *int32
+	Text *string `xdrmaxsize:"28"`
+}
+
+func (u aUnion) SwitchFieldName() string {
+	return "Type"
+}
+
+func (u aUnion) ArmForSwitch(sw int32) (string, bool) {
+	switch sw {
+	case 0:
+		return "Data", true
+	case 1:
+		return "Text", true
+	case 2: // void
+		return "", true
+	}
+
+	return "-", false
+}
+
 // testExpectedMRet is a convenience method to test an expected number of bytes
 // written and error for a marshal.
 func testExpectedMRet(t *testing.T, name string, n, wantN int, err, wantErr error) bool {
@@ -701,6 +767,159 @@ func TestEncoder(t *testing.T) {
 			continue
 		}
 	}
+}
+
+// valueTypeUnion is a union type with value-type arms for testing encoding
+type valueTypeUnion struct {
+	Type int32
+	Int  int32  // value type arm (switch 0)
+	Str  string // value type arm (switch 1)
+}
+
+func (u valueTypeUnion) SwitchFieldName() string {
+	return "Type"
+}
+
+func (u valueTypeUnion) ArmForSwitch(sw int32) (string, bool) {
+	switch sw {
+	case 0:
+		return "Int", true
+	case 1:
+		return "Str", true
+	case 2:
+		return "", true // void arm
+	}
+	return "-", false
+}
+
+// pointerTypeUnion is a union type with pointer-type arms for testing encoding
+type pointerTypeUnion struct {
+	Type int32
+	Int  *int32  // pointer type arm (switch 0)
+	Str  *string // pointer type arm (switch 1)
+}
+
+func (u pointerTypeUnion) SwitchFieldName() string {
+	return "Type"
+}
+
+func (u pointerTypeUnion) ArmForSwitch(sw int32) (string, bool) {
+	switch sw {
+	case 0:
+		return "Int", true
+	case 1:
+		return "Str", true
+	case 2:
+		return "", true // void arm
+	}
+	return "-", false
+}
+
+// TestMarshalUnionValueTypeArms tests encoding unions with value-type arms
+func TestMarshalUnionValueTypeArms(t *testing.T) {
+	t.Run("value-type int arm", func(t *testing.T) {
+		u := valueTypeUnion{Type: 0, Int: 42}
+		expected := []byte{
+			0x00, 0x00, 0x00, 0x00, // Type = 0
+			0x00, 0x00, 0x00, 0x2A, // Int = 42
+		}
+
+		data := newFixedWriter(8)
+		n, err := Marshal(data, u)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+		if n != 8 {
+			t.Errorf("bytes written = %d, want 8", n)
+		}
+		if !reflect.DeepEqual(data.Bytes(), expected) {
+			t.Errorf("got %v, want %v", data.Bytes(), expected)
+		}
+	})
+
+	t.Run("value-type string arm", func(t *testing.T) {
+		u := valueTypeUnion{Type: 1, Str: "hi"}
+		expected := []byte{
+			0x00, 0x00, 0x00, 0x01, // Type = 1
+			0x00, 0x00, 0x00, 0x02, 'h', 'i', 0x00, 0x00, // Str = "hi" (padded)
+		}
+
+		data := newFixedWriter(12)
+		n, err := Marshal(data, u)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+		if n != 12 {
+			t.Errorf("bytes written = %d, want 12", n)
+		}
+		if !reflect.DeepEqual(data.Bytes(), expected) {
+			t.Errorf("got %v, want %v", data.Bytes(), expected)
+		}
+	})
+
+	t.Run("void arm", func(t *testing.T) {
+		u := valueTypeUnion{Type: 2}
+		expected := []byte{
+			0x00, 0x00, 0x00, 0x02, // Type = 2
+		}
+
+		data := newFixedWriter(4)
+		n, err := Marshal(data, u)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+		if n != 4 {
+			t.Errorf("bytes written = %d, want 4", n)
+		}
+		if !reflect.DeepEqual(data.Bytes(), expected) {
+			t.Errorf("got %v, want %v", data.Bytes(), expected)
+		}
+	})
+}
+
+// TestMarshalUnionPointerTypeArms tests encoding unions with pointer-type arms
+func TestMarshalUnionPointerTypeArms(t *testing.T) {
+	t.Run("pointer-type int arm", func(t *testing.T) {
+		val := int32(42)
+		u := pointerTypeUnion{Type: 0, Int: &val}
+		expected := []byte{
+			0x00, 0x00, 0x00, 0x00, // Type = 0
+			0x00, 0x00, 0x00, 0x2A, // Int = 42
+		}
+
+		data := newFixedWriter(8)
+		n, err := Marshal(data, u)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+		if n != 8 {
+			t.Errorf("bytes written = %d, want 8", n)
+		}
+		if !reflect.DeepEqual(data.Bytes(), expected) {
+			t.Errorf("got %v, want %v", data.Bytes(), expected)
+		}
+	})
+
+	t.Run("pointer-type string arm", func(t *testing.T) {
+		val := "hi"
+		u := pointerTypeUnion{Type: 1, Str: &val}
+		expected := []byte{
+			0x00, 0x00, 0x00, 0x01, // Type = 1
+			0x00, 0x00, 0x00, 0x02, 'h', 'i', 0x00, 0x00, // Str = "hi" (padded)
+		}
+
+		data := newFixedWriter(12)
+		n, err := Marshal(data, u)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+		if n != 12 {
+			t.Errorf("bytes written = %d, want 12", n)
+		}
+		if !reflect.DeepEqual(data.Bytes(), expected) {
+			t.Errorf("got %v, want %v", data.Bytes(), expected)
+		}
+	})
 }
 
 // TestMarshalCorners ensures the Marshal function properly handles various

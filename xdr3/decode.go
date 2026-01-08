@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2012-2014 Dave Collins <dave@davec.name>
+ * Copyright (c) 2026 Stellar Development Foundation
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -17,8 +18,8 @@
 package xdr
 
 import (
+	"encoding/binary"
 	"fmt"
-	"io"
 	"math"
 	"reflect"
 	"strconv"
@@ -28,7 +29,6 @@ import (
 const maxInt32 = math.MaxInt32
 
 var errMaxSlice = "data exceeds max slice limit"
-var errIODecode = "%s while decoding %d bytes"
 
 // DecodeDefaultMaxDepth is the default maximum decoding depth
 const DecodeDefaultMaxDepth = 200
@@ -39,29 +39,32 @@ type DecodeOptions struct {
 	// It prevents infinite recursions in cyclic datastructures and determines the maximum callstack growth.
 	// If set to 0, DecodeDefaultMaxDepth will be used.
 	MaxDepth uint
-
-	// MaxInputLen sets the maximum input size. It is used by the decoder to sanity-check
-	// allocation sizes and avoid heap explosions from doctored inputs.
-	//
-	// If set to 0, the decoder will try to figure out the input size by checking whether
-	// the provided io.Reader implements Len() (e.g. strings.Reader, bytes.Reader and bytes.Buffer do).
-	// Otherwise, no sanity checks will be done.
-	MaxInputLen int
 }
 
 // DefaultDecodeOptions are the default decoding options.
 var DefaultDecodeOptions = DecodeOptions{
-	MaxDepth:    DecodeDefaultMaxDepth,
-	MaxInputLen: 0,
+	MaxDepth: DecodeDefaultMaxDepth,
+}
+
+// DecoderFrom is implemented by types that can decode themselves from a Decoder.
+// Types implementing this interface get a fast path in Decode(), bypassing reflection.
+// The maxDepth parameter tracks recursion depth to prevent stack overflow from
+// maliciously crafted deeply-nested data. Implementations should decrement maxDepth
+// when calling DecodeFrom on nested types and return an error if maxDepth reaches 0.
+type DecoderFrom interface {
+	DecodeFrom(d *Decoder, maxDepth uint) (int, error)
 }
 
 /*
 Unmarshal parses XDR-encoded data into the value pointed to by v reading from
-reader r and returning the total number of bytes read.  An addressable pointer
+a byte slice and returning the total number of bytes read.  An addressable pointer
 must be provided since Unmarshal needs to both store the result of the decode as
 well as obtain target type information.  Unmarhsal traverses v recursively and
 automatically indirects pointers through arbitrary depth, allocating them as
 necessary, to decode the data into the underlying value pointed to.
+
+If v implements DecoderFrom, its DecodeFrom method is called directly for
+better performance. Otherwise, reflection-based decoding is used.
 
 Unmarshal uses reflection to determine the type of the concrete value contained
 by v and performs a mapping of underlying XDR types to Go types as follows:
@@ -99,82 +102,71 @@ an ErrorCode value for further inspection from sophisticated callers.  Some
 potential issues are unsupported Go types, attempting to decode a value which is
 too large to fit into a specified Go type, and exceeding max slice limitations.
 */
-func Unmarshal(r io.Reader, v interface{}) (int, error) {
-	d := NewDecoder(r)
+func Unmarshal(data []byte, v interface{}) (int, error) {
+	d := NewDecoder(data)
 	return d.Decode(v)
 }
 
 // UnmarshalWithOptions works like Unmarshal but accepts decoding options.
-func UnmarshalWithOptions(r io.Reader, v interface{}, options DecodeOptions) (int, error) {
-	d := NewDecoderWithOptions(r, options)
+func UnmarshalWithOptions(data []byte, v interface{}, options DecodeOptions) (int, error) {
+	d := NewDecoderWithOptions(data, options)
 	return d.Decode(v)
 }
 
-type lenLeft interface {
-	Len() int
-}
-
-// A Decoder wraps an io.Reader that is expected to provide an XDR-encoded byte
-// stream and provides several exposed methods to manually decode various XDR
-// primitives without relying on reflection.  The NewDecoder function can be
-// used to get a new Decoder directly.
+// A Decoder reads XDR-encoded data from a byte slice and provides several
+// exposed methods to manually decode various XDR primitives without relying
+// on reflection. The NewDecoder function can be used to get a new Decoder directly.
 //
-// Typically, Unmarshal should be used instead of manual decoding.  A Decoder
+// Typically, Unmarshal should be used instead of manual decoding. A Decoder
 // is exposed, so it is possible to perform manual decoding should it be
 // necessary in complex scenarios where automatic reflection-based decoding
 // won't work.
 type Decoder struct {
-	// used to minimize heap allocations during decoding
-	scratchBuf [8]byte
-	r          io.Reader
-	l          lenLeft
-	maxDepth   uint
-}
-
-// readerLenWrapper wraps a reader an initial length and provides a Len() method indicating
-// how much input is left
-type readerLenWrapper struct {
-	inner      io.Reader
-	readCount  int
-	initialLen int
-}
-
-func (l *readerLenWrapper) Len() int {
-	return l.initialLen - l.readCount
-}
-
-func (l *readerLenWrapper) Read(p []byte) (int, error) {
-	n, err := l.inner.Read(p)
-	if n > 0 {
-		l.readCount += n
-	}
-	return n, err
+	buf      []byte
+	pos      int
+	maxDepth uint
 }
 
 // NewDecoder returns a Decoder that can be used to manually decode XDR data
-// from a provided reader. Typically, Unmarshal should be used instead of
+// from a provided byte slice. Typically, Unmarshal should be used instead of
 // manually creating a Decoder.
-func NewDecoder(r io.Reader) *Decoder {
-	return NewDecoderWithOptions(r, DefaultDecodeOptions)
+func NewDecoder(data []byte) *Decoder {
+	return NewDecoderWithOptions(data, DefaultDecodeOptions)
 }
 
 // NewDecoderWithOptions works like NewDecoder but allows supplying decoding options.
-func NewDecoderWithOptions(r io.Reader, options DecodeOptions) *Decoder {
+func NewDecoderWithOptions(data []byte, options DecodeOptions) *Decoder {
 	maxDepth := options.MaxDepth
 	if maxDepth < 1 {
 		maxDepth = DecodeDefaultMaxDepth
 	}
-	if l, ok := r.(lenLeft); ok {
-		return &Decoder{r: r, l: l, maxDepth: maxDepth}
+	return &Decoder{
+		buf:      data,
+		pos:      0,
+		maxDepth: maxDepth,
 	}
-	if options.MaxInputLen > 0 {
-		rlw := &readerLenWrapper{
-			inner:      r,
-			initialLen: options.MaxInputLen,
-		}
-		return &Decoder{r: rlw, l: rlw, maxDepth: maxDepth}
-	}
-	return &Decoder{r: r, l: nil, maxDepth: options.MaxDepth}
+}
+
+// Reset resets the decoder to read from a new byte slice, allowing reuse
+// of the decoder to reduce allocations.
+func (d *Decoder) Reset(data []byte) {
+	d.buf = data
+	d.pos = 0
+}
+
+// Remaining returns the number of unread bytes in the buffer.
+func (d *Decoder) Remaining() int {
+	return len(d.buf) - d.pos
+}
+
+// Position returns the current read position in the buffer.
+func (d *Decoder) Position() int {
+	return d.pos
+}
+
+// MaxDepth returns the maximum decoding depth setting.
+func (d *Decoder) MaxDepth() uint {
+	return d.maxDepth
 }
 
 // DecodeInt treats the next 4 bytes as an XDR encoded integer and returns the
@@ -187,16 +179,12 @@ func NewDecoderWithOptions(r io.Reader, options DecodeOptions) *Decoder {
 //	RFC Section 4.1 - Integer
 //	32-bit big-endian signed integer in range [-2147483648, 2147483647]
 func (d *Decoder) DecodeInt() (int32, int, error) {
-	n, err := io.ReadFull(d.r, d.scratchBuf[:4])
-	if err != nil {
-		msg := fmt.Sprintf(errIODecode, err.Error(), 4)
-		err := unmarshalError("DecodeInt", ErrIO, msg, d.scratchBuf[:n], err)
-		return 0, n, err
+	if d.Remaining() < 4 {
+		return 0, 0, unmarshalError("DecodeInt", ErrIO, "unexpected end of input", nil, nil)
 	}
-
-	rv := int32(d.scratchBuf[3]) | int32(d.scratchBuf[2])<<8 |
-		int32(d.scratchBuf[1])<<16 | int32(d.scratchBuf[0])<<24
-	return rv, n, nil
+	v := int32(binary.BigEndian.Uint32(d.buf[d.pos:]))
+	d.pos += 4
+	return v, 4, nil
 }
 
 // DecodeUint treats the next 4 bytes as an XDR encoded unsigned integer and
@@ -209,16 +197,12 @@ func (d *Decoder) DecodeInt() (int32, int, error) {
 //	RFC Section 4.2 - Unsigned Integer
 //	32-bit big-endian unsigned integer in range [0, 4294967295]
 func (d *Decoder) DecodeUint() (uint32, int, error) {
-	n, err := io.ReadFull(d.r, d.scratchBuf[:4])
-	if err != nil {
-		msg := fmt.Sprintf(errIODecode, err.Error(), 4)
-		err := unmarshalError("DecodeUint", ErrIO, msg, d.scratchBuf[:n], err)
-		return 0, n, err
+	if d.Remaining() < 4 {
+		return 0, 0, unmarshalError("DecodeUint", ErrIO, "unexpected end of input", nil, nil)
 	}
-
-	rv := uint32(d.scratchBuf[3]) | uint32(d.scratchBuf[2])<<8 |
-		uint32(d.scratchBuf[1])<<16 | uint32(d.scratchBuf[0])<<24
-	return rv, n, nil
+	v := binary.BigEndian.Uint32(d.buf[d.pos:])
+	d.pos += 4
+	return v, 4, nil
 }
 
 // DecodeEnum treats the next 4 bytes as an XDR encoded enumeration value and
@@ -284,18 +268,12 @@ func (d *Decoder) DecodeBool() (bool, int, error) {
 //	RFC Section 4.5 - Hyper Integer
 //	64-bit big-endian signed integer in range [-9223372036854775808, 9223372036854775807]
 func (d *Decoder) DecodeHyper() (int64, int, error) {
-	n, err := io.ReadFull(d.r, d.scratchBuf[:8])
-	if err != nil {
-		msg := fmt.Sprintf(errIODecode, err.Error(), 8)
-		err := unmarshalError("DecodeHyper", ErrIO, msg, d.scratchBuf[:n], err)
-		return 0, n, err
+	if d.Remaining() < 8 {
+		return 0, 0, unmarshalError("DecodeHyper", ErrIO, "unexpected end of input", nil, nil)
 	}
-
-	rv := int64(d.scratchBuf[7]) | int64(d.scratchBuf[6])<<8 |
-		int64(d.scratchBuf[5])<<16 | int64(d.scratchBuf[4])<<24 |
-		int64(d.scratchBuf[3])<<32 | int64(d.scratchBuf[2])<<40 |
-		int64(d.scratchBuf[1])<<48 | int64(d.scratchBuf[0])<<56
-	return rv, n, err
+	v := int64(binary.BigEndian.Uint64(d.buf[d.pos:]))
+	d.pos += 8
+	return v, 8, nil
 }
 
 // DecodeUhyper treats the next 8  bytes as an XDR encoded unsigned hyper value
@@ -309,18 +287,12 @@ func (d *Decoder) DecodeHyper() (int64, int, error) {
 //	RFC Section 4.5 - Unsigned Hyper Integer
 //	64-bit big-endian unsigned integer in range [0, 18446744073709551615]
 func (d *Decoder) DecodeUhyper() (uint64, int, error) {
-	n, err := io.ReadFull(d.r, d.scratchBuf[:8])
-	if err != nil {
-		msg := fmt.Sprintf(errIODecode, err.Error(), 8)
-		err := unmarshalError("DecodeUhyper", ErrIO, msg, d.scratchBuf[:n], err)
-		return 0, n, err
+	if d.Remaining() < 8 {
+		return 0, 0, unmarshalError("DecodeUhyper", ErrIO, "unexpected end of input", nil, nil)
 	}
-
-	rv := uint64(d.scratchBuf[7]) | uint64(d.scratchBuf[6])<<8 |
-		uint64(d.scratchBuf[5])<<16 | uint64(d.scratchBuf[4])<<24 |
-		uint64(d.scratchBuf[3])<<32 | uint64(d.scratchBuf[2])<<40 |
-		uint64(d.scratchBuf[1])<<48 | uint64(d.scratchBuf[0])<<56
-	return rv, n, nil
+	v := binary.BigEndian.Uint64(d.buf[d.pos:])
+	d.pos += 8
+	return v, 8, nil
 }
 
 // DecodeFloat treats the next 4 bytes as an XDR encoded floating point and
@@ -333,16 +305,12 @@ func (d *Decoder) DecodeUhyper() (uint64, int, error) {
 //	RFC Section 4.6 - Floating Point
 //	32-bit single-precision IEEE 754 floating point
 func (d *Decoder) DecodeFloat() (float32, int, error) {
-	n, err := io.ReadFull(d.r, d.scratchBuf[:4])
-	if err != nil {
-		msg := fmt.Sprintf(errIODecode, err.Error(), 4)
-		err := unmarshalError("DecodeFloat", ErrIO, msg, d.scratchBuf[:n], err)
-		return 0, n, err
+	if d.Remaining() < 4 {
+		return 0, 0, unmarshalError("DecodeFloat", ErrIO, "unexpected end of input", nil, nil)
 	}
-
-	val := uint32(d.scratchBuf[3]) | uint32(d.scratchBuf[2])<<8 |
-		uint32(d.scratchBuf[1])<<16 | uint32(d.scratchBuf[0])<<24
-	return math.Float32frombits(val), n, nil
+	v := binary.BigEndian.Uint32(d.buf[d.pos:])
+	d.pos += 4
+	return math.Float32frombits(v), 4, nil
 }
 
 // DecodeDouble treats the next 8 bytes as an XDR encoded double-precision
@@ -356,18 +324,12 @@ func (d *Decoder) DecodeFloat() (float32, int, error) {
 //	RFC Section 4.7 -  Double-Precision Floating Point
 //	64-bit double-precision IEEE 754 floating point
 func (d *Decoder) DecodeDouble() (float64, int, error) {
-	n, err := io.ReadFull(d.r, d.scratchBuf[:8])
-	if err != nil {
-		msg := fmt.Sprintf(errIODecode, err.Error(), 8)
-		err := unmarshalError("DecodeDouble", ErrIO, msg, d.scratchBuf[:n], err)
-		return 0, n, err
+	if d.Remaining() < 8 {
+		return 0, 0, unmarshalError("DecodeDouble", ErrIO, "unexpected end of input", nil, nil)
 	}
-
-	val := uint64(d.scratchBuf[7]) | uint64(d.scratchBuf[6])<<8 |
-		uint64(d.scratchBuf[5])<<16 | uint64(d.scratchBuf[4])<<24 |
-		uint64(d.scratchBuf[3])<<32 | uint64(d.scratchBuf[2])<<40 |
-		uint64(d.scratchBuf[1])<<48 | uint64(d.scratchBuf[0])<<56
-	return math.Float64frombits(val), n, nil
+	v := binary.BigEndian.Uint64(d.buf[d.pos:])
+	d.pos += 8
+	return math.Float64frombits(v), 8, nil
 }
 
 // RFC Section 4.8 -  Quadruple-Precision Floating Point
@@ -395,54 +357,43 @@ func (d *Decoder) DecodeFixedOpaque(size int32) ([]byte, int, error) {
 	return out, n, nil
 }
 
+// consumePaddedData validates XDR padding and advances the position.
+// Returns the start position in the buffer and the padded size.
+// Callers can access d.buf[start:start+size] for the actual data.
+func (d *Decoder) consumePaddedData(size int) (start, paddedSize int, err error) {
+	if size == 0 {
+		return d.pos, 0, nil
+	}
+
+	paddedSize = (size + 3) &^ 3 // Round up to multiple of 4
+	if uint(paddedSize) > uint(maxInt32) {
+		return 0, 0, unmarshalError("consumePaddedData", ErrOverflow, errMaxSlice, paddedSize, nil)
+	}
+	if d.Remaining() < paddedSize {
+		return 0, 0, unmarshalError("consumePaddedData", ErrIO, "unexpected end of input", nil, nil)
+	}
+
+	// Validate padding bytes are zero
+	for i := size; i < paddedSize; i++ {
+		if d.buf[d.pos+i] != 0 {
+			return 0, 0, unmarshalError("consumePaddedData", ErrIO, "non-zero padding", d.buf[d.pos+size:d.pos+paddedSize], nil)
+		}
+	}
+
+	start = d.pos
+	d.pos += paddedSize
+	return start, paddedSize, nil
+}
+
 // DecodeFixedOpaqueInplace is an in-place version of DecodeFixedOpaque.
 // It improves performance when the destination is pre-allocated (which avoids
 // internally allocating an extra slice and does not require further copying)
 func (d *Decoder) DecodeFixedOpaqueInplace(out []byte) (int, error) {
-	size := len(out)
-	// Nothing to do if size is 0.
-	if size == 0 {
-		return 0, nil
-	}
-
-	pad := (4 - (size % 4)) % 4
-	paddedSize := size + pad
-	if uint(paddedSize) > uint(maxInt32) {
-		err := unmarshalError("DecodeFixedOpaqueInplace", ErrOverflow,
-			errMaxSlice, paddedSize, nil)
+	start, n, err := d.consumePaddedData(len(out))
+	if err != nil {
 		return 0, err
 	}
-
-	n, err := io.ReadFull(d.r, out)
-	if err != nil {
-		msg := fmt.Sprintf(errIODecode, err.Error(), size)
-		err := unmarshalError("DecodeFixedOpaqueInplace", ErrIO, msg, out[:n],
-			err)
-		return n, err
-	}
-
-	if pad > 0 {
-		// the maximum value of pad is 3, so the scratch buffer should be enough
-		_ = d.scratchBuf[2]
-		padding := d.scratchBuf[:pad]
-		n2, err := io.ReadFull(d.r, padding)
-		if err != nil {
-			msg := fmt.Sprintf(errIODecode, err.Error(), pad)
-			err := unmarshalError("DecodeFixedOpaqueInplace", ErrIO, msg, out[:n],
-				err)
-			return n, err
-		}
-		n += n2
-		// check all the padding bytes to be zero
-		for _, p := range padding {
-			if p != 0x00 {
-				msg := "non-zero padding"
-				err := unmarshalError("DecodeFixedOpaqueInplace", ErrIO, msg, padding[:n2], nil)
-				return n, err
-			}
-		}
-	}
-
+	copy(out, d.buf[start:start+len(out)])
 	return n, nil
 }
 
@@ -463,15 +414,9 @@ func (d *Decoder) DecodeOpaque(maxSize int) ([]byte, int, error) {
 		return nil, n, err
 	}
 
-	maxSize = d.mergeInputLenAndMaxSize(maxSize)
-	if maxSize == 0 {
-		maxSize = maxInt32
-	}
-
+	maxSize = d.mergeRemainingAndMaxSize(maxSize)
 	if uint(dataLen) > uint(maxSize) {
-		err := unmarshalError("DecodeOpaque", ErrOverflow, errMaxSlice,
-			dataLen, nil)
-		return nil, n, err
+		return nil, n, unmarshalError("DecodeOpaque", ErrOverflow, errMaxSlice, dataLen, nil)
 	}
 
 	rv, n2, err := d.DecodeFixedOpaque(int32(dataLen))
@@ -503,23 +448,49 @@ func (d *Decoder) DecodeString(maxSize int) (string, int, error) {
 		return "", n, err
 	}
 
-	maxSize = d.mergeInputLenAndMaxSize(maxSize)
-	if maxSize == 0 {
-		maxSize = maxInt32
-	}
-
+	maxSize = d.mergeRemainingAndMaxSize(maxSize)
 	if uint(dataLen) > uint(maxSize) {
-		err = unmarshalError("DecodeString", ErrOverflow, errMaxSlice,
-			dataLen, nil)
-		return "", n, err
+		return "", n, unmarshalError("DecodeString", ErrOverflow, errMaxSlice, dataLen, nil)
 	}
 
-	opaque, n2, err := d.DecodeFixedOpaque(int32(dataLen))
-	n += n2
+	start, n2, err := d.consumePaddedData(int(dataLen))
 	if err != nil {
 		return "", n, err
 	}
-	return string(opaque), n, nil
+
+	return string(d.buf[start : start+int(dataLen)]), n + n2, nil
+}
+
+// Skip advances the decoder position by n bytes without decoding.
+func (d *Decoder) Skip(n int) error {
+	if n < 0 {
+		return unmarshalError("Skip", ErrBadArguments, "negative skip length", n, nil)
+	}
+	if d.Remaining() < n {
+		return unmarshalError("Skip", ErrIO, "unexpected end of input", nil, nil)
+	}
+	d.pos += n
+	return nil
+}
+
+// Bytes returns the remaining unread bytes in the buffer.
+// WARNING: The returned slice shares memory with the input buffer.
+func (d *Decoder) Bytes() []byte {
+	return d.buf[d.pos:]
+}
+
+// mergeRemainingAndMaxSize returns the effective maximum size for decoding,
+// taking into account both the user-specified maxSize and the remaining
+// input bytes. If maxSize is 0 (unlimited), it defaults to maxInt32.
+// The result is the minimum of maxSize and remaining bytes.
+func (d *Decoder) mergeRemainingAndMaxSize(maxSize int) int {
+	if maxSize == 0 {
+		maxSize = maxInt32
+	}
+	if remaining := d.Remaining(); remaining < maxSize {
+		return remaining
+	}
+	return maxSize
 }
 
 // decodeFixedArray treats the next bytes as a series of XDR encoded elements
@@ -577,15 +548,9 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int, m
 		return n, err
 	}
 
-	maxSize = d.mergeInputLenAndMaxSize(maxSize)
-	if maxSize == 0 {
-		maxSize = maxInt32
-	}
-
+	maxSize = d.mergeRemainingAndMaxSize(maxSize)
 	if uint(dataLen) > uint(maxSize) {
-		err := unmarshalError("decodeArray", ErrOverflow, errMaxSlice,
-			dataLen, nil)
-		return n, err
+		return n, unmarshalError("decodeArray", ErrOverflow, errMaxSlice, dataLen, nil)
 	}
 
 	// Allocate storage for the slice elements (the underlying array) if
@@ -621,10 +586,9 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int, m
 func setUnionArmsToNil(v reflect.Value) {
 	for i := 0; i < v.NumField(); i++ {
 		f := v.Field(i)
-		if f.Kind() != reflect.Ptr {
-			continue
+		if f.Kind() == reflect.Ptr && f.CanSet() {
+			f.Set(reflect.Zero(f.Type()))
 		}
-		v.Set(reflect.Zero(v.Type()))
 	}
 }
 
@@ -644,20 +608,23 @@ func (d *Decoder) decodeUnion(v reflect.Value, maxDepth uint) (int, error) {
 	vs := v.FieldByName(u.SwitchFieldName())
 
 	// ensure the switch field is a valid enum value for the union, if possible
-	enum, ok := vs.Interface().(Enum)
-
-	if ok && !enum.ValidEnum(i) {
+	enum, isEnum := vs.Interface().(Enum)
+	if isEnum && !enum.ValidEnum(i) {
 		msg := fmt.Sprintf("switch '%d' is not valid enum value for union", i)
 		err := unmarshalError("decode", ErrBadUnionSwitch, msg, nil, nil)
 		return n, err
 	}
 
+	// Set switch field value with proper type handling
 	kind := vs.Kind()
-	if kind == reflect.Uint || kind == reflect.Uint8 || kind == reflect.Uint16 ||
-		kind == reflect.Uint32 || kind == reflect.Uint64 {
-		vs.SetUint(uint64(i))
-	} else {
+	switch kind {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		vs.SetInt(int64(i))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		vs.SetUint(uint64(i))
+	default:
+		return n, unmarshalError("decodeUnion", ErrBadUnionSwitch,
+			fmt.Sprintf("switch field has unsupported type: %v", kind), nil, nil)
 	}
 
 	arm, ok := u.ArmForSwitch(i)
@@ -672,17 +639,15 @@ func (d *Decoder) decodeUnion(v reflect.Value, maxDepth uint) (int, error) {
 		return n, nil
 	}
 
-	vv := v.FieldByName(arm)
-
-	vvet := vv.Type().Elem()
-	vv.Set(reflect.New(vvet))
-
+	// Validate field exists in type before accessing it
 	field, ok := v.Type().FieldByName(arm)
 	if !ok {
 		msg := fmt.Sprintf("switch '%s' is not valid for union", arm)
 		err := unmarshalError("decode", ErrBadUnionSwitch, msg, nil, nil)
 		return n, err
 	}
+
+	vv := v.FieldByName(arm)
 
 	maxSize := 0
 	sizeTag := field.Tag.Get("xdrmaxsize")
@@ -694,12 +659,25 @@ func (d *Decoder) decodeUnion(v reflect.Value, maxDepth uint) (int, error) {
 		maxSize = int(sz)
 	}
 
-	n2, err := d.decode(vv.Elem(), maxSize, maxDepth)
-	n += n2
-
-	if err != nil {
-		return n, err
+	// Handle both pointer and value-type union arms
+	if vv.Kind() == reflect.Ptr {
+		// Pointer field - allocate new value and decode into it
+		vvet := vv.Type().Elem()
+		vv.Set(reflect.New(vvet))
+		n2, err := d.decode(vv.Elem(), maxSize, maxDepth)
+		n += n2
+		if err != nil {
+			return n, err
+		}
+	} else {
+		// Value field - decode directly into the field
+		n2, err := d.decode(vv, maxSize, maxDepth)
+		n += n2
+		if err != nil {
+			return n, err
+		}
 	}
+
 	return n, nil
 }
 
@@ -808,10 +786,11 @@ func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 	if err != nil {
 		return n, err
 	}
-	if left, ok := d.InputLen(); ok {
-		if uint(left) < uint(dataLen) {
-			return n, unmarshalError("decodeMap", ErrOverflow, errMaxSlice, dataLen, nil)
-		}
+	// Sanity check: each map entry requires at least 8 bytes (4 for key + 4 for value)
+	// This prevents allocating huge maps based on malicious length values
+	// Use multiplication (with uint64 to prevent overflow) instead of division for precision
+	if uint64(dataLen)*8 > uint64(d.Remaining()) {
+		return n, unmarshalError("decodeMap", ErrOverflow, errMaxSlice, dataLen, nil)
 	}
 
 	// Allocate storage for the underlying map if needed.
@@ -873,15 +852,6 @@ func (d *Decoder) decodeInterface(v reflect.Value, maxDepth uint) (int, error) {
 		return 0, err
 	}
 	return d.decode(ve, 0, maxDepth)
-}
-
-func (d *Decoder) mergeInputLenAndMaxSize(maxSize int) int {
-	if left, ok := d.InputLen(); ok {
-		if maxSize == 0 || left < maxSize {
-			return left
-		}
-	}
-	return maxSize
 }
 
 // decode is the main workhorse for unmarshalling via reflection.  It uses
@@ -1148,9 +1118,12 @@ func (d *Decoder) indirectIfPtr(v reflect.Value) (reflect.Value, error) {
 }
 
 // Decode operates identically to the Unmarshal function with the exception of
-// using the reader associated with the Decoder as the source of XDR-encoded
-// data instead of a user-supplied reader. See the Unmarhsal documentation for
-// specifics. Decode(v) is equivalent to DecodeWithMaxDepth(v, DecodeDefaultMaxDepth)
+// using the byte slice associated with the Decoder as the source of XDR-encoded
+// data instead of a user-supplied byte slice. See the Unmarshal documentation for
+// specifics.
+//
+// If v implements DecoderFrom, its DecodeFrom method is called directly for
+// better performance, bypassing reflection.
 func (d *Decoder) Decode(v interface{}) (int, error) {
 	if v == nil {
 		msg := "can't unmarshal to nil interface"
@@ -1158,6 +1131,12 @@ func (d *Decoder) Decode(v interface{}) (int, error) {
 			nil)
 	}
 
+	// Fast path: if v implements DecoderFrom, use it directly
+	if decodable, ok := v.(DecoderFrom); ok {
+		return decodable.DecodeFrom(d, d.maxDepth)
+	}
+
+	// Fallback: reflection-based decoding
 	vv := reflect.ValueOf(v)
 	if vv.Kind() != reflect.Ptr {
 		msg := fmt.Sprintf("can't unmarshal to non-pointer '%v' - use "+
@@ -1173,12 +1152,4 @@ func (d *Decoder) Decode(v interface{}) (int, error) {
 	}
 
 	return d.decode(vv.Elem(), 0, d.maxDepth)
-}
-
-// InputLen returns the size left to read from the decoder's input if available
-func (d *Decoder) InputLen() (int, bool) {
-	if d.l == nil {
-		return 0, false
-	}
-	return d.l.Len(), true
 }

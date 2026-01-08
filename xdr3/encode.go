@@ -131,7 +131,7 @@ func (enc *Encoder) EncodeUint(v uint32) (int, error) {
 	n, err := enc.w.Write(enc.scratchBuf[:4])
 	if err != nil {
 		msg := fmt.Sprintf(errIOEncode, err.Error(), 4)
-		err := marshalError("EncodeUint", ErrIO, msg, enc.scratchBuf[:4], err)
+		err := marshalError("EncodeUint", ErrIO, msg, enc.scratchBuf[:n], err)
 		return n, err
 	}
 
@@ -201,7 +201,7 @@ func (enc *Encoder) EncodeHyper(v int64) (int, error) {
 	n, err := enc.w.Write(enc.scratchBuf[:8])
 	if err != nil {
 		msg := fmt.Sprintf(errIOEncode, err.Error(), 8)
-		err := marshalError("EncodeHyper", ErrIO, msg, enc.scratchBuf[:8], err)
+		err := marshalError("EncodeHyper", ErrIO, msg, enc.scratchBuf[:n], err)
 		return n, err
 	}
 
@@ -312,7 +312,7 @@ func (enc *Encoder) EncodeFixedOpaque(v []byte) (int, error) {
 			written := make([]byte, l+n2)
 			copy(written, v)
 			copy(written[l:], b[:n2])
-			msg := fmt.Sprintf(errIOEncode, err.Error(), l+pad)
+			msg := fmt.Sprintf(errIOEncode, err.Error(), l+n2)
 			err := marshalError("EncodeFixedOpaque", ErrIO, msg,
 				written, err)
 			return n, err
@@ -460,7 +460,6 @@ func (enc *Encoder) encodeUnion(v reflect.Value) (int, error) {
 
 	vs := v.FieldByName(u.SwitchFieldName())
 	n, err := enc.encode(vs)
-
 	if err != nil {
 		return n, err
 	}
@@ -473,6 +472,7 @@ func (enc *Encoder) encodeUnion(v reflect.Value) (int, error) {
 	} else {
 		sw = int32(vs.Int())
 	}
+
 	arm, ok := u.ArmForSwitch(sw)
 
 	// void arm, we're done
@@ -481,26 +481,25 @@ func (enc *Encoder) encodeUnion(v reflect.Value) (int, error) {
 	}
 
 	vv := v.FieldByName(arm)
-
 	if !vv.IsValid() || !ok {
 		msg := fmt.Sprintf("invalid union switch: %d", sw)
 		err := marshalError("encodeUnion", ErrBadUnionSwitch, msg, nil, nil)
 		return n, err
 	}
 
-	if vv.Kind() != reflect.Ptr {
-		msg := fmt.Sprintf("invalid union value field: %v", vv.Kind())
-		err := marshalError("encodeUnion", ErrBadUnionValue, msg, nil, nil)
+	// Handle both pointer and value-type union arms
+	if vv.Kind() == reflect.Ptr {
+		if vv.IsNil() {
+			return n, marshalError("encodeUnion", ErrBadUnionValue,
+				"can't encode nil pointer union arm", nil, nil)
+		}
+		n2, err := enc.encode(vv.Elem())
+		n += n2
 		return n, err
 	}
 
-	if vv.IsNil() {
-		msg := fmt.Sprintf("can't encode nil union value")
-		err := marshalError("encodeUnion", ErrBadUnionValue, msg, nil, nil)
-		return n, err
-	}
-
-	n2, err := enc.encode(vv.Elem())
+	// Value-type arm - encode directly
+	n2, err := enc.encode(vv)
 	n += n2
 	return n, err
 }

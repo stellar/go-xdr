@@ -54,47 +54,8 @@ func ExampleMarshal() {
 	// encoded data: [171 205 239 0 0 0 0 2 0 0 0 1 0 0 0 10]
 }
 
-// This example demonstrates how to use Unmarshal to decode XDR encoded data
-// from a byte slice into a struct.
-func ExampleUnmarshal() {
-	// Hypothetical image header format.
-	type ImageHeader struct {
-		Signature   [3]byte
-		Version     uint32
-		IsGrayscale bool
-		NumSections uint32
-	}
-
-	// XDR encoded data described by the above structure.  Typically this
-	// would be read from a file or across the network, but use a manual
-	// byte array here as an example.
-	encodedData := []byte{
-		0xAB, 0xCD, 0xEF, 0x00, // Signature
-		0x00, 0x00, 0x00, 0x02, // Version
-		0x00, 0x00, 0x00, 0x01, // IsGrayscale
-		0x00, 0x00, 0x00, 0x0A, // NumSections
-	}
-
-	// Declare a variable to provide Unmarshal with a concrete type and
-	// instance to decode into.
-	var h ImageHeader
-	bytesRead, err := xdr.Unmarshal(bytes.NewReader(encodedData), &h)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	fmt.Println("bytes read:", bytesRead)
-	fmt.Printf("h: %+v", h)
-
-	// Output:
-	// bytes read: 16
-	// h: {Signature:[171 205 239] Version:2 IsGrayscale:true NumSections:10}
-}
-
 // This example demonstrates how to manually decode XDR encoded data from a
-// reader. Compare this example with the Unmarshal example which performs the
-// same task automatically by utilizing a struct type definition and reflection.
+// byte slice using Decoder.
 func ExampleNewDecoder() {
 	// XDR encoded data for a hypothetical ImageHeader struct as follows:
 	// type ImageHeader struct {
@@ -111,7 +72,7 @@ func ExampleNewDecoder() {
 	}
 
 	// Get a new decoder for manual decoding.
-	dec := xdr.NewDecoder(bytes.NewReader(encodedData))
+	dec := xdr.NewDecoder(encodedData)
 
 	signature, _, err := dec.DecodeFixedOpaque(3)
 	if err != nil {

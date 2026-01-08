@@ -48,9 +48,11 @@ var DefaultDecodeOptions = DecodeOptions{
 
 // DecoderFrom is implemented by types that can decode themselves from a Decoder.
 // Types implementing this interface get a fast path in Decode(), bypassing reflection.
-// Implementations can call d.MaxDepth() if they need to track recursion depth.
+// The maxDepth parameter tracks recursion depth to prevent stack overflow from
+// maliciously crafted deeply-nested data. Implementations should decrement maxDepth
+// when calling DecodeFrom on nested types and return an error if maxDepth reaches 0.
 type DecoderFrom interface {
-	DecodeFrom(d *Decoder) (int, error)
+	DecodeFrom(d *Decoder, maxDepth uint) (int, error)
 }
 
 /*
@@ -120,10 +122,9 @@ func UnmarshalWithOptions(data []byte, v interface{}, options DecodeOptions) (in
 // necessary in complex scenarios where automatic reflection-based decoding
 // won't work.
 type Decoder struct {
-	buf          []byte
-	pos          int
-	maxDepth     uint
-	currentDepth uint
+	buf      []byte
+	pos      int
+	maxDepth uint
 }
 
 // NewDecoder returns a Decoder that can be used to manually decode XDR data
@@ -140,19 +141,17 @@ func NewDecoderWithOptions(data []byte, options DecodeOptions) *Decoder {
 		maxDepth = DecodeDefaultMaxDepth
 	}
 	return &Decoder{
-		buf:          data,
-		pos:          0,
-		maxDepth:     maxDepth,
-		currentDepth: maxDepth,
+		buf:      data,
+		pos:      0,
+		maxDepth: maxDepth,
 	}
 }
 
 // Reset resets the decoder to read from a new byte slice, allowing reuse
-// of the decoder to reduce allocations. CurrentDepth is reset to MaxDepth.
+// of the decoder to reduce allocations.
 func (d *Decoder) Reset(data []byte) {
 	d.buf = data
 	d.pos = 0
-	d.currentDepth = d.maxDepth
 }
 
 // Remaining returns the number of unread bytes in the buffer.
@@ -168,24 +167,6 @@ func (d *Decoder) Position() int {
 // MaxDepth returns the maximum decoding depth setting.
 func (d *Decoder) MaxDepth() uint {
 	return d.maxDepth
-}
-
-// EnterScope should be called at the start of decoding a compound type
-// (struct, union, or array element). Returns an error if max depth would be exceeded.
-// Use with LeaveScope: `if err := d.EnterScope(); err != nil { return err }; defer d.LeaveScope()`
-func (d *Decoder) EnterScope() error {
-	if d.currentDepth == 0 {
-		return unmarshalError("EnterScope", ErrMaxDecodingDepth, "maximum decoding depth reached", nil, nil)
-	}
-	d.currentDepth--
-	return nil
-}
-
-// LeaveScope should be called when exiting a compound type. Should be used with defer.
-func (d *Decoder) LeaveScope() {
-	if d.currentDepth < d.maxDepth {
-		d.currentDepth++
-	}
 }
 
 // DecodeInt treats the next 4 bytes as an XDR encoded integer and returns the
@@ -1152,7 +1133,7 @@ func (d *Decoder) Decode(v interface{}) (int, error) {
 
 	// Fast path: if v implements DecoderFrom, use it directly
 	if decodable, ok := v.(DecoderFrom); ok {
-		return decodable.DecodeFrom(d)
+		return decodable.DecodeFrom(d, d.maxDepth)
 	}
 
 	// Fallback: reflection-based decoding

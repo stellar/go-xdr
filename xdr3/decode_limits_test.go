@@ -31,6 +31,9 @@ func TestMaxOutputBytes(t *testing.T) {
 	structSize := int64(unsafe.Sizeof(wideStruct{})) // 256
 
 	t.Run("unlimited", func(t *testing.T) {
+		// err is intentionally ignored: the oversized header will cause an EOF
+		// once the actual payload runs out, but we only care that the decoder
+		// didn't immediately reject the input or allocate zero elements.
 		var result []wideStruct
 		reader := bytes.NewReader(payload)
 		_, err := UnmarshalWithOptions(reader, &result, DecodeOptions{})

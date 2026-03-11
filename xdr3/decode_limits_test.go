@@ -16,8 +16,12 @@ type wideStruct struct {
 	F24, F25, F26, F27, F28, F29, F30, F31 int64
 }
 
-// makeArrayPayload creates an XDR-encoded variable-length array header
-// followed by zero-filled element data.
+// makeArrayPayload creates an XDR variable-length array payload of payloadSize
+// bytes where the declared element count in the 4-byte header intentionally
+// far exceeds the number of elements that actually fit in the remaining data.
+// This simulates a malicious or malformed input that claims a huge array to
+// provoke unbounded allocation — the decoder must rely on MaxOutputBytes to
+// cap memory use before it encounters EOF while reading element data.
 func makeArrayPayload(payloadSize int) []byte {
 	payload := make([]byte, payloadSize)
 	declaredLen := uint32(payloadSize - 4)

@@ -3,6 +3,7 @@ package xdr
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 	"unsafe"
 )
@@ -56,16 +57,22 @@ func TestMaxOutputBytes(t *testing.T) {
 	})
 
 	t.Run("not_reached", func(t *testing.T) {
-		// Budget larger than what the payload can produce — decode
-		// should succeed without hitting the limit.
+		// The payload is intentionally malformed (oversized header): the
+		// declared element count is far larger than the available bytes, so
+		// the decoder will hit end-of-input before exhausting the budget.
+		// This subtest verifies that MaxOutputBytes is not the cause of the
+		// error when the budget exceeds what the payload can produce.
 		budget := int64(3000) * structSize
 		var result []wideStruct
 		reader := bytes.NewReader(payload)
 		_, err := UnmarshalWithOptions(reader, &result, DecodeOptions{
 			MaxOutputBytes: budget,
 		})
+		if errors.Is(err, ErrOutputBytesExceeded) {
+			t.Errorf("expected budget not to be exceeded, got %v", err)
+		}
 		if len(result) == 0 {
-			t.Errorf("expected some decoded elements, err=%v", err)
+			t.Errorf("expected some decoded elements before hitting end of input, err=%v", err)
 		}
 	})
 }

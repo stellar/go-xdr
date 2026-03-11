@@ -3,6 +3,7 @@ package xdr
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 	"unsafe"
 )
@@ -64,8 +65,11 @@ func TestMaxOutputBytes(t *testing.T) {
 		_, err := UnmarshalWithOptions(reader, &result, DecodeOptions{
 			MaxOutputBytes: budget,
 		})
+		if errors.Is(err, ErrOutputBytesExceeded) {
+			t.Errorf("expected budget not to be exceeded, got %v", err)
+		}
 		if len(result) == 0 {
-			t.Errorf("expected some decoded elements, err=%v", err)
+			t.Errorf("expected some decoded elements before hitting end of input, err=%v", err)
 		}
 	})
 }

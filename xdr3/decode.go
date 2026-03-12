@@ -33,7 +33,7 @@ var errMaxSlice = "data exceeds max slice limit"
 var errIODecode = "%s while decoding %d bytes"
 
 // DecodeDefaultMaxDepth is the default maximum decoding depth
-const DecodeDefaultMaxDepth = 200
+const DecodeDefaultMaxDepth = 250
 
 // MaxPrealloc is the maximum number of elements pre-allocated when decoding
 // variable-length arrays. Arrays larger than this are grown incrementally via

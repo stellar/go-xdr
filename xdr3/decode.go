@@ -55,7 +55,7 @@ type DecodeOptions struct {
 	// Otherwise, no sanity checks will be done.
 	MaxInputLen int
 
-	// MaxDecodedSize is an approximate limit on the cumulative in-memory size
+	// MaxMemoryBytes is an approximate limit on the cumulative in-memory size
 	// (in bytes) of Go objects created during a single decode operation. The
 	// decoder tracks unsafe.Sizeof for each decoded value (array elements,
 	// union arms, optional fields, opaque data) and aborts if the running
@@ -64,7 +64,7 @@ type DecodeOptions struct {
 	// somewhat higher.
 	//
 	// If set to 0, no size limit is enforced (default).
-	MaxDecodedSize int64
+	MaxMemoryBytes int64
 }
 
 // DefaultDecodeOptions are the default decoding options.
@@ -147,8 +147,8 @@ type Decoder struct {
 	r              io.Reader
 	l              lenLeft
 	maxDepth       uint
-	maxDecodedSize int64
-	decodedSize    int64
+	maxMemoryBytes int64
+	memoryBytes    int64
 }
 
 // readerLenWrapper wraps a reader an initial length and provides a Len() method indicating
@@ -184,18 +184,18 @@ func NewDecoderWithOptions(r io.Reader, options DecodeOptions) *Decoder {
 	if maxDepth < 1 {
 		maxDepth = DecodeDefaultMaxDepth
 	}
-	mob := options.MaxDecodedSize
+	mob := options.MaxMemoryBytes
 	if l, ok := r.(lenLeft); ok {
-		return &Decoder{r: r, l: l, maxDepth: maxDepth, maxDecodedSize: mob}
+		return &Decoder{r: r, l: l, maxDepth: maxDepth, maxMemoryBytes: mob}
 	}
 	if options.MaxInputLen > 0 {
 		rlw := &readerLenWrapper{
 			inner:      r,
 			initialLen: options.MaxInputLen,
 		}
-		return &Decoder{r: rlw, l: rlw, maxDepth: maxDepth, maxDecodedSize: mob}
+		return &Decoder{r: rlw, l: rlw, maxDepth: maxDepth, maxMemoryBytes: mob}
 	}
-	return &Decoder{r: r, l: nil, maxDepth: maxDepth, maxDecodedSize: mob}
+	return &Decoder{r: r, l: nil, maxDepth: maxDepth, maxMemoryBytes: mob}
 }
 
 // DecodeInt treats the next 4 bytes as an XDR encoded integer and returns the
@@ -1253,29 +1253,29 @@ func (d *Decoder) InputLen() (int, bool) {
 	return d.l.Len(), true
 }
 
-// Sentinel errors for decoded size tracking — using errors.New instead of
+// Sentinel errors for memory tracking — using errors.New instead of
 // fmt.Errorf keeps the function small enough for the Go compiler to inline.
 // Callers wrap these with fmt.Errorf to add context.
 var (
-	ErrDecodedSizeExceeded  = errors.New("decoded size limit exceeded")
+	ErrMemoryLimitExceeded  = errors.New("memory limit exceeded")
 	ErrNegativeTrackingSize = errors.New("negative tracking size")
 )
 
 // TrackOutputBytes adds size to the cumulative decoded output byte count and
-// returns an error if MaxDecodedSize has been exceeded. Generated and
+// returns an error if MaxMemoryBytes has been exceeded. Generated and
 // reflection-based decoders call this before each allocation (array element,
 // union arm, optional field, opaque data, string) to bound memory
 // amplification from untrusted input.
 func (d *Decoder) TrackOutputBytes(size int64) error {
-	if d.maxDecodedSize <= 0 {
+	if d.maxMemoryBytes <= 0 {
 		return nil
 	}
 	if size < 0 {
 		return ErrNegativeTrackingSize
 	}
-	d.decodedSize += size
-	if d.decodedSize > d.maxDecodedSize || d.decodedSize < 0 {
-		return ErrDecodedSizeExceeded
+	d.memoryBytes += size
+	if d.memoryBytes > d.maxMemoryBytes || d.memoryBytes < 0 {
+		return ErrMemoryLimitExceeded
 	}
 	return nil
 }

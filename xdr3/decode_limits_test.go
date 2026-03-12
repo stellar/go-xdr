@@ -26,7 +26,7 @@ func makeArrayPayload(payloadSize int) []byte {
 	return payload
 }
 
-func TestMaxDecodedSize(t *testing.T) {
+func TestMaxMemoryBytes(t *testing.T) {
 	payloadSize := 100000
 	payload := makeArrayPayload(payloadSize)
 	structSize := int64(unsafe.Sizeof(wideStruct{})) // 256
@@ -45,7 +45,7 @@ func TestMaxDecodedSize(t *testing.T) {
 		var result []wideStruct
 		reader := bytes.NewReader(payload)
 		_, err := UnmarshalWithOptions(reader, &result, DecodeOptions{
-			MaxDecodedSize: budget,
+			MaxMemoryBytes: budget,
 		})
 		if err == nil {
 			t.Error("expected error when output byte limit exceeded")
@@ -63,9 +63,9 @@ func TestMaxDecodedSize(t *testing.T) {
 		var result []wideStruct
 		reader := bytes.NewReader(payload)
 		_, err := UnmarshalWithOptions(reader, &result, DecodeOptions{
-			MaxDecodedSize: budget,
+			MaxMemoryBytes: budget,
 		})
-		if errors.Is(err, ErrDecodedSizeExceeded) {
+		if errors.Is(err, ErrMemoryLimitExceeded) {
 			t.Errorf("expected budget not to be exceeded, got %v", err)
 		}
 		if len(result) == 0 {

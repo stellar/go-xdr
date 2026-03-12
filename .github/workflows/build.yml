@@ -5,16 +5,26 @@ on:
     branches: [master]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build
     strategy:
       matrix:
-        go: ["1.20", "1.21"]
+        go: ["1.25", "1.26"]
     runs-on: ubuntu-latest
     container: golang:${{ matrix.go }}-bookworm
     steps:
     - run: go install golang.org/x/tools/cmd/goimports@latest
-    - run: go install golang.org/x/lint/golint@latest
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - run: ./gotest.sh
+
+  complete:
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+    - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      run: exit 1

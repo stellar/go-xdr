@@ -17,12 +17,14 @@
 package xdr
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"reflect"
 	"strconv"
 	"time"
+	"unsafe"
 )
 
 const maxInt32 = math.MaxInt32
@@ -31,7 +33,12 @@ var errMaxSlice = "data exceeds max slice limit"
 var errIODecode = "%s while decoding %d bytes"
 
 // DecodeDefaultMaxDepth is the default maximum decoding depth
-const DecodeDefaultMaxDepth = 200
+const DecodeDefaultMaxDepth = 250
+
+// MaxPrealloc is the maximum number of elements pre-allocated when decoding
+// variable-length arrays. Arrays larger than this are grown incrementally via
+// append to keep memory proportional to data actually decoded.
+const MaxPrealloc = 256
 
 // DecodeOptions configures how Decoding is done.
 type DecodeOptions struct {
@@ -47,6 +54,17 @@ type DecodeOptions struct {
 	// the provided io.Reader implements Len() (e.g. strings.Reader, bytes.Reader and bytes.Buffer do).
 	// Otherwise, no sanity checks will be done.
 	MaxInputLen int
+
+	// MaxMemoryBytes is an approximate limit on the cumulative in-memory size
+	// (in bytes) of Go objects created during a single decode operation. The
+	// decoder tracks unsafe.Sizeof for each decoded value (array elements,
+	// union arms, optional fields, opaque data) and aborts if the running
+	// total exceeds this limit. This is a best-effort bound: internal copies
+	// and over-allocation by the Go runtime may cause actual heap usage to be
+	// somewhat higher.
+	//
+	// If set to 0, no size limit is enforced (default).
+	MaxMemoryBytes int64
 }
 
 // DefaultDecodeOptions are the default decoding options.
@@ -125,10 +143,12 @@ type lenLeft interface {
 // won't work.
 type Decoder struct {
 	// used to minimize heap allocations during decoding
-	scratchBuf [8]byte
-	r          io.Reader
-	l          lenLeft
-	maxDepth   uint
+	scratchBuf     [8]byte
+	r              io.Reader
+	l              lenLeft
+	maxDepth       uint
+	maxMemoryBytes int64
+	memoryBytes    int64
 }
 
 // readerLenWrapper wraps a reader an initial length and provides a Len() method indicating
@@ -164,17 +184,18 @@ func NewDecoderWithOptions(r io.Reader, options DecodeOptions) *Decoder {
 	if maxDepth < 1 {
 		maxDepth = DecodeDefaultMaxDepth
 	}
+	mob := options.MaxMemoryBytes
 	if l, ok := r.(lenLeft); ok {
-		return &Decoder{r: r, l: l, maxDepth: maxDepth}
+		return &Decoder{r: r, l: l, maxDepth: maxDepth, maxMemoryBytes: mob}
 	}
 	if options.MaxInputLen > 0 {
 		rlw := &readerLenWrapper{
 			inner:      r,
 			initialLen: options.MaxInputLen,
 		}
-		return &Decoder{r: rlw, l: rlw, maxDepth: maxDepth}
+		return &Decoder{r: rlw, l: rlw, maxDepth: maxDepth, maxMemoryBytes: mob}
 	}
-	return &Decoder{r: r, l: nil, maxDepth: options.MaxDepth}
+	return &Decoder{r: r, l: nil, maxDepth: maxDepth, maxMemoryBytes: mob}
 }
 
 // DecodeInt treats the next 4 bytes as an XDR encoded integer and returns the
@@ -387,6 +408,14 @@ func (d *Decoder) DecodeDouble() (float64, int, error) {
 //	RFC Section 4.9 - Fixed-Length Opaque Data
 //	Fixed-length uninterpreted data zero-padded to a multiple of four
 func (d *Decoder) DecodeFixedOpaque(size int32) ([]byte, int, error) {
+	if size < 0 {
+		err := unmarshalError("DecodeFixedOpaque", ErrBadArguments,
+			"negative size", size, nil)
+		return nil, 0, err
+	}
+	if err := d.TrackOutputBytes(int64(size)); err != nil {
+		return nil, 0, err
+	}
 	out := make([]byte, size)
 	n, err := d.DecodeFixedOpaqueInplace(out)
 	if err != nil {
@@ -588,15 +617,11 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int, m
 		return n, err
 	}
 
-	// Allocate storage for the slice elements (the underlying array) if
-	// existing slice does not have enough capacity.
 	sliceLen := int(dataLen)
-	if v.Cap() < sliceLen {
-		v.Set(reflect.MakeSlice(v.Type(), sliceLen, sliceLen))
-	}
-	v.SetLen(sliceLen)
 
 	// Treat []byte (byte is alias for uint8) as opaque data unless ignored.
+	// DecodeFixedOpaque handles both tracking and allocation, so we skip
+	// pre-allocation here — SetBytes replaces the backing array directly.
 	if !ignoreOpaque && v.Type().Elem().Kind() == reflect.Uint8 {
 		data, n2, err := d.DecodeFixedOpaque(int32(sliceLen))
 		n += n2
@@ -607,12 +632,42 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int, m
 		return n, nil
 	}
 
-	// Decode each slice element.
-	for i := 0; i < sliceLen; i++ {
-		n2, err := d.decode(v.Index(i), 0, maxDepth)
-		n += n2
-		if err != nil {
+	// Cap pre-allocation to avoid memory amplification from untrusted inputs.
+	// The array length check above compares element count against remaining
+	// input bytes, but each element may be much larger in memory than on the
+	// wire. For large arrays, capping initial allocation and growing via
+	// append ensures memory usage is proportional to data actually decoded.
+	elemSize := int64(v.Type().Elem().Size())
+	if sliceLen <= MaxPrealloc {
+		// Small arrays: track total upfront, then pre-allocate and decode.
+		if err := d.TrackOutputBytes(elemSize * int64(sliceLen)); err != nil {
 			return n, err
+		}
+		if v.Cap() < sliceLen {
+			v.Set(reflect.MakeSlice(v.Type(), sliceLen, sliceLen))
+		}
+		v.SetLen(sliceLen)
+		for i := 0; i < sliceLen; i++ {
+			n2, err := d.decode(v.Index(i), 0, maxDepth)
+			n += n2
+			if err != nil {
+				return n, err
+			}
+		}
+	} else {
+		// Large arrays: cap initial allocation, track and grow per element.
+		v.Set(reflect.MakeSlice(v.Type(), 0, MaxPrealloc))
+		zeroElem := reflect.Zero(v.Type().Elem())
+		for i := 0; i < sliceLen; i++ {
+			if err := d.TrackOutputBytes(elemSize); err != nil {
+				return n, err
+			}
+			v.Set(reflect.Append(v, zeroElem))
+			n2, err := d.decode(v.Index(i), 0, maxDepth)
+			n += n2
+			if err != nil {
+				return n, err
+			}
 		}
 	}
 	return n, nil
@@ -675,6 +730,10 @@ func (d *Decoder) decodeUnion(v reflect.Value, maxDepth uint) (int, error) {
 	vv := v.FieldByName(arm)
 
 	vvet := vv.Type().Elem()
+	// Track the heap allocation for the pointer-typed union arm before allocating.
+	if err := d.TrackOutputBytes(int64(vvet.Size())); err != nil {
+		return n, err
+	}
 	vv.Set(reflect.New(vvet))
 
 	field, ok := v.Type().FieldByName(arm)
@@ -823,7 +882,12 @@ func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 	// Decode each key and value according to their type.
 	keyType := vt.Key()
 	elemType := vt.Elem()
+	keySize := int64(keyType.Size())
+	elemSize := int64(elemType.Size())
 	for i := uint32(0); i < dataLen; i++ {
+		if err := d.TrackOutputBytes(keySize); err != nil {
+			return n, err
+		}
 		key := reflect.New(keyType).Elem()
 		n2, err := d.decode(key, 0, maxDepth)
 		n += n2
@@ -831,6 +895,9 @@ func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 			return n, err
 		}
 
+		if err := d.TrackOutputBytes(elemSize); err != nil {
+			return n, err
+		}
 		val := reflect.New(elemType).Elem()
 		n2, err = d.decode(val, 0, maxDepth)
 		n += n2
@@ -1109,6 +1176,9 @@ func (d *Decoder) allocPtrIfNil(v *reflect.Value) error {
 	}
 	if isNil {
 		vet := v.Type().Elem()
+		if err := d.TrackOutputBytes(int64(vet.Size())); err != nil {
+			return err
+		}
 		v.Set(reflect.New(vet))
 	}
 	return nil
@@ -1181,4 +1251,39 @@ func (d *Decoder) InputLen() (int, bool) {
 		return 0, false
 	}
 	return d.l.Len(), true
+}
+
+// Sentinel errors for memory tracking — using errors.New instead of
+// fmt.Errorf keeps the function small enough for the Go compiler to inline.
+// Callers wrap these with fmt.Errorf to add context.
+var (
+	ErrMemoryLimitExceeded  = errors.New("memory limit exceeded")
+	ErrNegativeTrackingSize = errors.New("negative tracking size")
+)
+
+// TrackOutputBytes adds size to the cumulative decoded output byte count and
+// returns an error if MaxMemoryBytes has been exceeded. Generated and
+// reflection-based decoders call this before each allocation (array element,
+// union arm, optional field, opaque data, string) to bound memory
+// amplification from untrusted input.
+func (d *Decoder) TrackOutputBytes(size int64) error {
+	if d.maxMemoryBytes <= 0 {
+		return nil
+	}
+	if size < 0 {
+		return ErrNegativeTrackingSize
+	}
+	d.memoryBytes += size
+	if d.memoryBytes > d.maxMemoryBytes || d.memoryBytes < 0 {
+		return ErrMemoryLimitExceeded
+	}
+	return nil
+}
+
+// TrackOutputBytesOf is a generic helper that calls TrackOutputBytes with
+// unsafe.Sizeof(*new(T)), which the compiler resolves to a constant at
+// compile time. This keeps the unsafe import contained in go-xdr —
+// generated code calls this function without needing to import unsafe.
+func TrackOutputBytesOf[T any](d *Decoder) error {
+	return d.TrackOutputBytes(int64(unsafe.Sizeof(*new(T))))
 }

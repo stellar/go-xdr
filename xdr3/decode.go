@@ -142,8 +142,11 @@ type lenLeft interface {
 // necessary in complex scenarios where automatic reflection-based decoding
 // won't work.
 type Decoder struct {
-	// used to minimize heap allocations during decoding
+	// scratchBuf minimizes heap allocations during primitive decodes.
+	// rlw is inline so that a decoder with MaxInputLen > 0 pays a single
+	// heap allocation (the Decoder itself) instead of two.
 	scratchBuf     [8]byte
+	rlw            readerLenWrapper
 	r              io.Reader
 	l              lenLeft
 	maxDepth       uint
@@ -151,24 +154,16 @@ type Decoder struct {
 	memoryBytes    int64
 }
 
-// readerLenWrapper wraps a reader an initial length and provides a Len() method indicating
-// how much input is left
+// readerLenWrapper adapts an io.LimitedReader to the lenLeft interface.
+// io.LimitedReader's Read clamps p and returns io.EOF once N reaches zero,
+// so enforcement happens at the io.Reader boundary regardless of how the
+// underlying reader behaves.
 type readerLenWrapper struct {
-	inner      io.Reader
-	readCount  int
-	initialLen int
+	io.LimitedReader
 }
 
 func (l *readerLenWrapper) Len() int {
-	return l.initialLen - l.readCount
-}
-
-func (l *readerLenWrapper) Read(p []byte) (int, error) {
-	n, err := l.inner.Read(p)
-	if n > 0 {
-		l.readCount += n
-	}
-	return n, err
+	return int(l.N)
 }
 
 // NewDecoder returns a Decoder that can be used to manually decode XDR data
@@ -184,18 +179,28 @@ func NewDecoderWithOptions(r io.Reader, options DecodeOptions) *Decoder {
 	if maxDepth < 1 {
 		maxDepth = DecodeDefaultMaxDepth
 	}
-	mob := options.MaxMemoryBytes
-	if l, ok := r.(lenLeft); ok {
-		return &Decoder{r: r, l: l, maxDepth: maxDepth, maxMemoryBytes: mob}
-	}
+	d := &Decoder{maxDepth: maxDepth, maxMemoryBytes: options.MaxMemoryBytes}
 	if options.MaxInputLen > 0 {
-		rlw := &readerLenWrapper{
-			inner:      r,
-			initialLen: options.MaxInputLen,
+		// Always wrap: enforcement happens at the io.Reader boundary, not
+		// via trusting the caller's lenLeft implementation. Tighten the
+		// budget to the inner reader's reported remaining length when
+		// smaller, so InputLen() reflects actually-readable bytes.
+		budget := int64(options.MaxInputLen)
+		if l, ok := r.(lenLeft); ok {
+			if left := int64(l.Len()); left < budget {
+				budget = left
+			}
 		}
-		return &Decoder{r: rlw, l: rlw, maxDepth: maxDepth, maxMemoryBytes: mob}
+		d.rlw.LimitedReader = io.LimitedReader{R: r, N: budget}
+		d.r = &d.rlw
+		d.l = &d.rlw
+		return d
 	}
-	return &Decoder{r: r, l: nil, maxDepth: maxDepth, maxMemoryBytes: mob}
+	d.r = r
+	if l, ok := r.(lenLeft); ok {
+		d.l = l
+	}
+	return d
 }
 
 // DecodeInt treats the next 4 bytes as an XDR encoded integer and returns the

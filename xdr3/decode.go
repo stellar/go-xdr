@@ -32,8 +32,12 @@ const maxInt32 = math.MaxInt32
 var errMaxSlice = "data exceeds max slice limit"
 var errIODecode = "%s while decoding %d bytes"
 
-// DecodeDefaultMaxDepth is the default maximum decoding depth
-const DecodeDefaultMaxDepth = 250
+// DecodeDefaultMaxDepth is the default maximum decoding depth.
+const DecodeDefaultMaxDepth = 1500
+
+// DecodeUnlimitedDepth disables the maximum decoding depth limit. Only use it
+// for trusted input.
+const DecodeUnlimitedDepth = uint(math.MaxUint)
 
 // MaxPrealloc is the maximum number of elements pre-allocated when decoding
 // variable-length arrays. Arrays larger than this are grown incrementally via
@@ -45,6 +49,7 @@ type DecodeOptions struct {
 	// MaxDepth is the maximum decoding depth (i.e. maximum nesting of data structures).
 	// It prevents infinite recursions in cyclic datastructures and determines the maximum callstack growth.
 	// If set to 0, DecodeDefaultMaxDepth will be used.
+	// Set it to DecodeUnlimitedDepth to disable the limit.
 	MaxDepth uint
 
 	// MaxInputLen sets the maximum input size. It is used by the decoder to sanity-check

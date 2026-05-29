@@ -1157,6 +1157,41 @@ func TestDecodeMaxDepth(t *testing.T) {
 	assertError(t, "", err, &UnmarshalError{ErrorCode: ErrMaxDecodingDepth})
 }
 
+// linkedNode builds arbitrarily deep nesting for depth-limit tests.
+type linkedNode struct {
+	Next *linkedNode
+}
+
+func buildLinkedChain(depth int) *linkedNode {
+	var head *linkedNode
+	for i := 0; i < depth; i++ {
+		head = &linkedNode{Next: head}
+	}
+	return head
+}
+
+func TestDecodeUnlimitedDepth(t *testing.T) {
+	depth := DecodeDefaultMaxDepth + 100
+	var buf bytes.Buffer
+	if _, err := Marshal(&buf, buildLinkedChain(depth)); err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+
+	// Default limit rejects the deeply nested input.
+	bufCopy := buf
+	var s linkedNode
+	_, err := NewDecoder(&bufCopy).Decode(&s)
+	assertError(t, "", err, &UnmarshalError{ErrorCode: ErrMaxDecodingDepth})
+
+	// DecodeUnlimitedDepth decodes it.
+	bufCopy = buf
+	var s2 linkedNode
+	_, err = NewDecoderWithOptions(&bufCopy, DecodeOptions{MaxDepth: DecodeUnlimitedDepth}).Decode(&s2)
+	if err != nil {
+		t.Fatalf("unexpected error decoding with unlimited depth: %v", err)
+	}
+}
+
 func TestDecodeMaxAllocationCheck_ImplicitLenReader(t *testing.T) {
 	var buf bytes.Buffer
 	_, err := Marshal(&buf, "thisstringis23charslong")

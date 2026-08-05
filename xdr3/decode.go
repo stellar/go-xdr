@@ -503,9 +503,6 @@ func (d *Decoder) DecodeOpaque(maxSize int) ([]byte, int, error) {
 	}
 
 	maxSize = d.mergeInputLenAndMaxSize(maxSize)
-	if maxSize == 0 {
-		maxSize = maxInt32
-	}
 
 	if uint(dataLen) > uint(maxSize) {
 		err := unmarshalError("DecodeOpaque", ErrOverflow, errMaxSlice,
@@ -543,9 +540,6 @@ func (d *Decoder) DecodeString(maxSize int) (string, int, error) {
 	}
 
 	maxSize = d.mergeInputLenAndMaxSize(maxSize)
-	if maxSize == 0 {
-		maxSize = maxInt32
-	}
 
 	if uint(dataLen) > uint(maxSize) {
 		err = unmarshalError("DecodeString", ErrOverflow, errMaxSlice,
@@ -617,9 +611,6 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool, maxSize int, m
 	}
 
 	maxSize = d.mergeInputLenAndMaxSize(maxSize)
-	if maxSize == 0 {
-		maxSize = maxInt32
-	}
 
 	if uint(dataLen) > uint(maxSize) {
 		err := unmarshalError("decodeArray", ErrOverflow, errMaxSlice,
@@ -878,6 +869,12 @@ func (d *Decoder) decodeMap(v reflect.Value, maxDepth uint) (int, error) {
 		return n, err
 	}
 	if left, ok := d.InputLen(); ok {
+		// Clamp defensively so a negative remaining length (a miscounting
+		// reader) rejects any non-zero declared length rather than wrapping
+		// to a huge uint. Mirrors mergeInputLenAndMaxSize's max(0, left).
+		if left < 0 {
+			left = 0
+		}
 		if uint(left) < uint(dataLen) {
 			return n, unmarshalError("decodeMap", ErrOverflow, errMaxSlice, dataLen, nil)
 		}
@@ -952,11 +949,27 @@ func (d *Decoder) decodeInterface(v reflect.Value, maxDepth uint) (int, error) {
 	return d.decode(ve, 0, maxDepth)
 }
 
+// mergeInputLenAndMaxSize returns the effective upper bound on the length of the
+// next variable-length field: the tighter of two independently-optional limits,
+// each defaulting to maxInt32 when unset.
+//
+//   - maxSize is the field's schema bound; a non-positive value means "no
+//     schema bound".
+//   - InputLen(), when available, is the number of bytes still readable. A
+//     remaining length of 0 is a real bound that rejects any non-zero declared
+//     length; it must not be conflated with "no limit". A negative value (a
+//     defensive guard against a miscounting reader) is clamped to 0.
+//
+// The schema bound is normalized to maxInt32 before merging so a returned 0 can
+// only ever mean "zero bytes remaining". Callers can therefore compare
+// uint(dataLen) > uint(result) directly, with no further 0-means-unlimited
+// special-casing.
 func (d *Decoder) mergeInputLenAndMaxSize(maxSize int) int {
-	if left, ok := d.InputLen(); ok {
-		if maxSize == 0 || left < maxSize {
-			return left
-		}
+	if maxSize <= 0 {
+		maxSize = maxInt32
+	}
+	if left, ok := d.InputLen(); ok && left < maxSize {
+		return max(0, left)
 	}
 	return maxSize
 }

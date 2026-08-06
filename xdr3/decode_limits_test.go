@@ -140,6 +140,82 @@ func TestMaxInputLenDecodeStringBypass(t *testing.T) {
 	}
 }
 
+// TestMaxInputLenPrefixAtEndOfInput is the regression for the length-prefix-at-
+// end-of-input bypass: when a variable-length field's 4-byte length prefix is
+// the final 4 bytes of the input, InputLen() reports 0 bytes remaining. That 0
+// is a genuine bound (reject any non-zero declared length) and must not be
+// mistaken for "no limit configured". The rejection must therefore come from the
+// DecodeString bound check, before DecodeFixedOpaque runs make([]byte, dataLen).
+func TestMaxInputLenPrefixAtEndOfInput(t *testing.T) {
+	cases := []struct {
+		name     string
+		declared uint32
+	}{
+		{"huge declared length (2 GiB allocation averted)", 0x7fffffff},
+		{"small declared length still rejected", 1000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// [int][string length prefix]; the prefix is the last 4 bytes.
+			payload := make([]byte, 8)
+			binary.BigEndian.PutUint32(payload[0:4], 0x42)
+			binary.BigEndian.PutUint32(payload[4:8], tc.declared)
+
+			// MaxInputLen spans the whole input, so no bytes remain once the
+			// prefix is read — the shape SafeUnmarshalBase64 produces for an
+			// exact buffer.
+			dec := NewDecoderWithOptions(bytes.NewReader(payload),
+				DecodeOptions{MaxInputLen: len(payload)})
+
+			if _, _, err := dec.DecodeInt(); err != nil {
+				t.Fatalf("DecodeInt: %v", err)
+			}
+
+			_, _, err := dec.DecodeString(0)
+			if err == nil {
+				t.Fatal("DecodeString: expected rejection, got nil")
+			}
+
+			var ue *UnmarshalError
+			if !errors.As(err, &ue) {
+				t.Fatalf("DecodeString: error %v is not an *UnmarshalError", err)
+			}
+			// Func must be DecodeString (the bound check), not
+			// DecodeFixedOpaqueInplace (which only fails after the allocation).
+			if ue.Func != "DecodeString" || ue.ErrorCode != ErrOverflow {
+				t.Errorf("rejected by xdr:%s (%v); want DecodeString/ErrOverflow — "+
+					"bound deleted and allocation reached", ue.Func, ue.ErrorCode)
+			}
+		})
+	}
+}
+
+// TestMaxInputLenSlicePrefixAtEndOfInput covers the same bypass through the
+// non-opaque slice path (decodeArray). A []uint32 whose length prefix is the
+// whole input declares a large element count with no element data following;
+// the fix must reject at the decodeArray bound check, before reflect.MakeSlice
+// and the element-decode loop are reached.
+func TestMaxInputLenSlicePrefixAtEndOfInput(t *testing.T) {
+	payload := make([]byte, 4)
+	binary.BigEndian.PutUint32(payload[0:4], 0x7fffffff)
+
+	var out []uint32
+	_, err := UnmarshalWithOptions(bytes.NewReader(payload), &out,
+		DecodeOptions{MaxInputLen: len(payload)})
+	if err == nil {
+		t.Fatal("expected rejection, got nil")
+	}
+
+	var ue *UnmarshalError
+	if !errors.As(err, &ue) {
+		t.Fatalf("error %v is not an *UnmarshalError", err)
+	}
+	if ue.Func != "decodeArray" || ue.ErrorCode != ErrOverflow {
+		t.Errorf("rejected by xdr:%s (%v); want decodeArray/ErrOverflow — "+
+			"bound deleted and allocation reached", ue.Func, ue.ErrorCode)
+	}
+}
+
 // TestMaxInputLenBudget verifies that the wrapper's budget is the minimum of
 // MaxInputLen and the inner reader's reported remaining length, regardless of
 // which is tighter. InputLen() reports the actual initial budget.
@@ -162,5 +238,38 @@ func TestMaxInputLenBudget(t *testing.T) {
 				t.Errorf("InputLen=(%d,%v), want (%d,true)", left, ok, tc.wantBudget)
 			}
 		})
+	}
+}
+
+// negLenReader implements lenLeft but reports a negative remaining length,
+// decoupled from the bytes it actually holds. With MaxInputLen unset the
+// decoder trusts this Len() directly (d.l = r), so it drives InputLen()
+// negative — the input shape decodeMap's clamp must tolerate.
+type negLenReader struct{ r *bytes.Reader }
+
+func (n *negLenReader) Read(p []byte) (int, error) { return n.r.Read(p) }
+func (n *negLenReader) Len() int                   { return -1 }
+
+// TestDecodeMapNegativeInputLenClamped verifies decodeMap's guard clamps a
+// negative InputLen to 0 rather than letting uint(negative) wrap to a huge
+// value and bypass the check. The map length prefix declares one entry with no
+// entry data following; the guard must reject before the decode loop runs.
+func TestDecodeMapNegativeInputLenClamped(t *testing.T) {
+	payload := []byte{0x00, 0x00, 0x00, 0x01} // map length = 1, then nothing
+
+	var m map[uint32]uint32
+	_, err := UnmarshalWithOptions(&negLenReader{r: bytes.NewReader(payload)}, &m,
+		DecodeOptions{})
+	if err == nil {
+		t.Fatal("expected rejection, got nil")
+	}
+
+	var ue *UnmarshalError
+	if !errors.As(err, &ue) {
+		t.Fatalf("error %v is not an *UnmarshalError", err)
+	}
+	if ue.Func != "decodeMap" || ue.ErrorCode != ErrOverflow {
+		t.Errorf("rejected by xdr:%s (%v); want decodeMap/ErrOverflow — "+
+			"negative InputLen wrapped and bypassed the guard", ue.Func, ue.ErrorCode)
 	}
 }

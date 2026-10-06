@@ -1,3 +1,3 @@
 module github.com/stellar/go-xdr
 
-go 1.25
+go 1.26
